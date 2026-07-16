@@ -87,7 +87,21 @@ install_ubuntu() {
 
 install_fedora() {
   log "Installing host dependencies with dnf."
-  sudo_cmd dnf install -y git make curl openssl nodejs npm docker docker-compose-plugin
+  sudo_cmd dnf install -y git make curl openssl nodejs npm
+
+  if ! has docker; then
+    if ! sudo_cmd dnf install -y moby-engine; then
+      sudo_cmd dnf install -y docker
+    fi
+  fi
+
+  if ! docker compose version >/dev/null 2>&1; then
+    sudo_cmd dnf install -y docker-compose-plugin || true
+  fi
+
+  if ! docker compose version >/dev/null 2>&1; then
+    sudo_cmd dnf install -y docker-compose || true
+  fi
 }
 
 install_macos() {
@@ -161,6 +175,18 @@ ensure_docker_running() {
   die "Docker daemon is not reachable yet. Start Docker or refresh your shell session, then rerun make setup."
 }
 
+ensure_docker_compose() {
+  if docker compose version >/dev/null 2>&1; then
+    return
+  fi
+
+  if has docker-compose; then
+    return
+  fi
+
+  die "Docker Compose is not available. Install a package that provides 'docker compose' or 'docker-compose', then rerun make setup."
+}
+
 create_env() {
   if [ -f .env ]; then
     log ".env already exists; leaving it unchanged."
@@ -232,6 +258,7 @@ main() {
 
   ensure_pnpm
   ensure_docker_running "$os"
+  ensure_docker_compose
   create_env
 
   log "Setup complete. Next: make build && make up"

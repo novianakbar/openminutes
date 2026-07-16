@@ -1,6 +1,6 @@
 SHELL := /bin/sh
 
-COMPOSE ?= docker compose
+COMPOSE ?= $(shell if docker compose version >/dev/null 2>&1; then printf 'docker compose'; elif command -v docker-compose >/dev/null 2>&1; then printf 'docker-compose'; else printf 'docker compose'; fi)
 ADMIN_EMAIL ?= admin@openminutes.dev
 ADMIN_PASSWORD ?= admin12345
 
