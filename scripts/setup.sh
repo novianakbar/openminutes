@@ -226,7 +226,10 @@ MINIO_SECRET_KEY=${minio_password}
 MINIO_BUCKET=recordings
 
 BETTER_AUTH_SECRET=${auth_secret}
+# If the app is accessed through a VM/host forwarded port, change these to the
+# external browser URL, for example http://192.168.56.10:18080.
 BETTER_AUTH_URL=http://localhost:8080
+# Comma-separated origins are supported.
 WEB_ORIGIN=http://localhost:8080
 INTERNAL_TOKEN=${internal_token}
 

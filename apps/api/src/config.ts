@@ -3,6 +3,11 @@ const optionalEnv = (key: string) => {
   const value = process.env[key]?.trim();
   return value ? value : undefined;
 };
+const listEnv = (key: string, fallback: string) =>
+  env(key, fallback)
+    .split(",")
+    .map((value) => value.trim())
+    .filter(Boolean);
 
 const botVncMode = env("BOT_VNC_MODE", "host").toLowerCase();
 
@@ -26,7 +31,7 @@ export const config = {
     "BETTER_AUTH_SECRET",
     "dev-secret-ganti-di-production-min-32-karakter!",
   ),
-  webOrigin: env("WEB_ORIGIN", "http://localhost:5173"),
+  webOrigins: listEnv("WEB_ORIGIN", "http://localhost:5173"),
   botImage: env("BOT_IMAGE", "openminutes-bot:dev"),
   botNetwork: optionalEnv("BOT_NETWORK"),
   botVncMode: botVncMode === "network" ? "network" : "host",

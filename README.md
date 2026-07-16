@@ -113,8 +113,10 @@ the expected config.
 Important values:
 
 - `APP_PORT` — host HTTP port for the web app, default `8080`.
-- `BETTER_AUTH_URL` — public URL used by auth, for example `https://example.com`.
-- `WEB_ORIGIN` — allowed web origin, usually the same public URL.
+- `BETTER_AUTH_URL` — public browser URL used by auth, for example
+  `https://example.com` or `http://<vm-ip>:<forwarded-port>`.
+- `WEB_ORIGIN` — allowed browser origin. Comma-separated values are supported,
+  for example `http://localhost:8080,http://<vm-ip>:<forwarded-port>`.
 - `POSTGRES_PORT`, `REDIS_PORT`, `MINIO_HOST_PORT`, `MINIO_CONSOLE_PORT` —
   local loopback ports for operations/debugging.
 - `BOT_IMAGE=openminutes-bot:prod`.
