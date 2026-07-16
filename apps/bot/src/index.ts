@@ -3,10 +3,14 @@ import { mkdir, readFile, stat, writeFile } from "node:fs/promises";
 import { chromium as vanillaChromium, type BrowserContext } from "playwright";
 import { chromium as stealthChromium } from "playwright-extra";
 import StealthPlugin from "puppeteer-extra-plugin-stealth";
-import { reportRecording, reportStatus } from "./api.js";
+import { reportRecording, reportScreenshot, reportStatus } from "./api.js";
 import { startRecording, type Recorder } from "./audio.js";
 import { startLiveTranscriptionStream, type LiveTranscriptionStream } from "./liveTranscription.js";
-import { uploadRecording } from "./upload.js";
+import {
+  startScreenshotCapture,
+  type ScreenshotCapture,
+} from "./screenshots.js";
+import { uploadRecording, uploadScreenshot } from "./upload.js";
 import { googleMeet } from "./platforms/googleMeet.js";
 import { teams } from "./platforms/teams.js";
 import { zoom } from "./platforms/zoom.js";
@@ -36,14 +40,22 @@ function required(key: string): string {
   return value;
 }
 
+function positiveNumberEnv(key: string, fallback: number): number {
+  const value = Number(process.env[key] ?? fallback);
+  return Number.isFinite(value) && value > 0 ? value : fallback;
+}
+
 const cfg = {
   meetingId: required("MEETING_ID"),
   meetingUrl: required("MEETING_URL"),
   platform: required("PLATFORM"),
   mode: process.env.MODE ?? "post_meeting",
   botName: process.env.BOT_NAME ?? "OpenMinutes Assistant",
-  joinTimeoutMs: Number(process.env.JOIN_TIMEOUT_SEC ?? "300") * 1000,
-  maxDurationMs: Number(process.env.MAX_DURATION_MIN ?? "180") * 60_000,
+  joinTimeoutMs: positiveNumberEnv("JOIN_TIMEOUT_SEC", 300) * 1000,
+  maxDurationMs: positiveNumberEnv("MAX_DURATION_MIN", 180) * 60_000,
+  screenshotIntervalMs: positiveNumberEnv("SCREENSHOT_INTERVAL_SEC", 10) * 1000,
+  screenshotMaxCount: Math.floor(positiveNumberEnv("SCREENSHOT_MAX_COUNT", 50)),
+  screenshotMinHashDistance: positiveNumberEnv("SCREENSHOT_MIN_HASH_DISTANCE", 24),
 };
 
 function shouldUseStealth(platform: string): boolean {
@@ -250,6 +262,26 @@ async function main() {
 
   await reportStatus(cfg.meetingId, "recording");
   const recorder = startRecording(RECORDING_PATH);
+  const screenshots = startScreenshotCapture(page, {
+    startedAt: recorder.startedAt,
+    intervalMs: cfg.screenshotIntervalMs,
+    maxScreenshots: cfg.screenshotMaxCount,
+    minHashDistance: cfg.screenshotMinHashDistance,
+    onCapture: async (capture, index) => {
+      const objectKey = await uploadScreenshot(
+        cfg.meetingId,
+        index,
+        capture.buffer,
+      );
+      await reportScreenshot(cfg.meetingId, {
+        objectKey,
+        capturedAtMs: capture.capturedAtMs,
+        width: capture.width,
+        height: capture.height,
+        hash: capture.hash,
+      });
+    },
+  });
   const liveTranscription =
     cfg.mode === "realtime"
       ? startLiveTranscriptionStream(cfg.meetingId)
@@ -262,15 +294,19 @@ async function main() {
   ]);
   console.log(`Meeting ended: ${endReason}`);
 
-  await finish(recorder, liveTranscription);
+  await finish(recorder, liveTranscription, screenshots);
   await context.close().catch(() => {});
 }
 
 async function finish(
   recorder: Recorder,
   liveTranscription: LiveTranscriptionStream | null,
+  screenshots: ScreenshotCapture,
 ) {
   const durationSec = Math.round((Date.now() - recorder.startedAt) / 1000);
+  await screenshots.stop().catch((err) => {
+    console.error("screenshot capture finalize gagal:", err);
+  });
   await liveTranscription?.stop().catch((err) => {
     console.error("live transcription finalize gagal:", err);
   });

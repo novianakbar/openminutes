@@ -38,3 +38,16 @@ export function reportRecording(
     durationSec,
   });
 }
+
+export function reportScreenshot(
+  meetingId: string,
+  data: {
+    objectKey: string;
+    capturedAtMs: number;
+    width: number;
+    height: number;
+    hash: string;
+  },
+): Promise<void> {
+  return post(`/internal/meetings/${meetingId}/screenshots`, data);
+}

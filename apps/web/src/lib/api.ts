@@ -107,4 +107,6 @@ export const api = {
     }
     return res.blob();
   },
+  meetingScreenshotUrl: (meetingId: string, screenshotId: number) =>
+    `/api/meetings/${meetingId}/screenshots/${screenshotId}`,
 };

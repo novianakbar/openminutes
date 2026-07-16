@@ -55,6 +55,17 @@ export interface TranscriptSegment {
   text: string;
 }
 
+export interface MeetingScreenshot {
+  id: number;
+  meetingId: string;
+  objectKey: string;
+  capturedAtMs: number;
+  width: number;
+  height: number;
+  hash: string;
+  createdAt: string;
+}
+
 export type LivePartialTranscriptSegment = Omit<TranscriptSegment, "id">;
 
 export type LiveTranscriptEvent =
@@ -71,6 +82,7 @@ export type LiveTranscriptEvent =
 export interface MeetingDetail extends Meeting {
   transcript: TranscriptSegment[];
   events: MeetingStatusEvent[];
+  screenshots: MeetingScreenshot[];
 }
 
 export interface MeetingListResponse {

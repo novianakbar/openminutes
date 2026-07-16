@@ -147,3 +147,16 @@ export const transcriptSegments = pgTable("transcript_segments", {
   speaker: text("speaker"),
   text: text("text").notNull(),
 });
+
+export const meetingScreenshots = pgTable("meeting_screenshots", {
+  id: serial("id").primaryKey(),
+  meetingId: uuid("meeting_id")
+    .references(() => meetings.id)
+    .notNull(),
+  objectKey: text("object_key").notNull(),
+  capturedAtMs: integer("captured_at_ms").notNull(),
+  width: integer("width").notNull(),
+  height: integer("height").notNull(),
+  hash: text("hash").notNull(),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});

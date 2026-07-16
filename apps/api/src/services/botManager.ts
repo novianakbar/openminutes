@@ -3,6 +3,16 @@ import type { Platform, TranscriptionMode } from "@openminutes/shared";
 import { config } from "../config";
 
 const docker = new Docker();
+const optionalBotEnv = [
+  "SCREENSHOT_INTERVAL_SEC",
+  "SCREENSHOT_MAX_COUNT",
+  "SCREENSHOT_MIN_HASH_DISTANCE",
+]
+  .map((key) => {
+    const value = process.env[key]?.trim();
+    return value ? `${key}=${value}` : null;
+  })
+  .filter((value): value is string => value !== null);
 
 export interface SpawnBotOptions {
   meetingId: string;
@@ -43,6 +53,7 @@ export async function spawnBot(opts: SpawnBotOptions): Promise<string> {
       `MINIO_ACCESS_KEY=${config.minio.accessKey}`,
       `MINIO_SECRET_KEY=${config.minio.secretKey}`,
       `MINIO_BUCKET=${config.minio.bucket}`,
+      ...optionalBotEnv,
     ],
     HostConfig: hostConfig,
     ExposedPorts: { "5900/tcp": {} },

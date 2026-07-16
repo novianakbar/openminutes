@@ -20,3 +20,15 @@ export async function uploadRecording(
   });
   return objectKey;
 }
+
+export async function uploadScreenshot(
+  meetingId: string,
+  index: number,
+  buffer: Buffer,
+): Promise<string> {
+  const objectKey = `${meetingId}/screenshots/${String(index).padStart(3, "0")}.png`;
+  await minio.putObject(bucket, objectKey, buffer, buffer.length, {
+    "Content-Type": "image/png",
+  });
+  return objectKey;
+}

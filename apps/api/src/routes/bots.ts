@@ -11,7 +11,12 @@ import {
 import { auth } from "../auth";
 import { db, schema } from "../db";
 import { spawnBot, stopBot, isContainerGone } from "../services/botManager";
-import { deleteRecording, getRecording } from "../services/storage";
+import {
+  deleteRecording,
+  deleteStoredObject,
+  getRecording,
+  getStoredObject,
+} from "../services/storage";
 import { enqueueTranscription } from "../services/queue";
 import { mintViewToken, VIEW_TOKEN_TTL_SEC } from "../services/viewToken";
 import { isLiveStatus } from "../services/vncProxy";
@@ -44,6 +49,11 @@ const listMeetingsQuerySchema = z.object({
       "failed",
     ])
     .default("all"),
+});
+
+const screenshotParamsSchema = z.object({
+  id: z.string().uuid(),
+  screenshotId: z.coerce.number().int().positive(),
 });
 
 const activeStatuses = ["joining", "waiting_admission", "recording"] as const;
@@ -297,8 +307,13 @@ export async function botRoutes(app: FastifyInstance) {
       .from(schema.meetingStatusEvents)
       .where(eq(schema.meetingStatusEvents.meetingId, id))
       .orderBy(asc(schema.meetingStatusEvents.createdAt));
+    const screenshots = await db
+      .select()
+      .from(schema.meetingScreenshots)
+      .where(eq(schema.meetingScreenshots.meetingId, id))
+      .orderBy(desc(schema.meetingScreenshots.capturedAtMs));
 
-    return { ...meeting, transcript: segments, events };
+    return { ...meeting, transcript: segments, events, screenshots };
   });
 
   app.delete("/bots/:id", async (req, reply) => {
@@ -372,11 +387,21 @@ export async function botRoutes(app: FastifyInstance) {
     if (meeting.audioObjectKey) {
       await deleteRecording(meeting.audioObjectKey);
     }
+    const screenshots = await db
+      .select()
+      .from(schema.meetingScreenshots)
+      .where(eq(schema.meetingScreenshots.meetingId, id));
+    await Promise.all(
+      screenshots.map((screenshot) => deleteStoredObject(screenshot.objectKey)),
+    );
 
     await db.transaction(async (tx) => {
       await tx
         .delete(schema.transcriptSegments)
         .where(eq(schema.transcriptSegments.meetingId, id));
+      await tx
+        .delete(schema.meetingScreenshots)
+        .where(eq(schema.meetingScreenshots.meetingId, id));
       await tx
         .delete(schema.meetingStatusEvents)
         .where(eq(schema.meetingStatusEvents.meetingId, id));
@@ -388,6 +413,50 @@ export async function botRoutes(app: FastifyInstance) {
     });
 
     return { meetingId: id, deleted: true };
+  });
+
+  app.get("/meetings/:id/screenshots/:screenshotId", async (req, reply) => {
+    const user = (req as any).user;
+    const parsed = screenshotParamsSchema.safeParse(req.params);
+    if (!parsed.success) return reply.code(400).send({ error: "Invalid screenshot id" });
+    const { id, screenshotId } = parsed.data;
+
+    const [meeting] = await db
+      .select()
+      .from(schema.meetings)
+      .where(
+        and(eq(schema.meetings.id, id), eq(schema.meetings.userId, user.id)),
+      )
+      .limit(1);
+    if (!meeting) return reply.code(404).send({ error: "Meeting not found" });
+
+    const [screenshot] = await db
+      .select()
+      .from(schema.meetingScreenshots)
+      .where(
+        and(
+          eq(schema.meetingScreenshots.id, screenshotId),
+          eq(schema.meetingScreenshots.meetingId, id),
+        ),
+      )
+      .limit(1);
+    if (!screenshot) {
+      return reply.code(404).send({ error: "Screenshot not found" });
+    }
+
+    const object = await getStoredObject(screenshot.objectKey);
+    if (!object) {
+      return reply.code(404).send({ error: "Screenshot file was not found in storage" });
+    }
+
+    return reply
+      .header("content-type", object.contentType ?? "image/png")
+      .header("content-length", object.sizeBytes)
+      .header(
+        "content-disposition",
+        `inline; filename="meeting-${id}-screenshot-${screenshot.id}.png"`,
+      )
+      .send(object.stream);
   });
 
   // Transkripsi ulang / retry manual. Melayani semua jalur gagal: provider

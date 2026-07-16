@@ -8,6 +8,7 @@ import {
   CheckCircle2,
   ExternalLink,
   FileText,
+  Images,
   Loader2,
   MonitorPlay,
   RefreshCw,
@@ -31,6 +32,7 @@ import type {
   LivePartialTranscriptSegment,
   LiveTranscriptEvent,
   MeetingStatusEvent,
+  MeetingScreenshot,
   RealtimeTranscriptStatus,
   TranscriptSegment,
 } from "../lib/types";
@@ -75,6 +77,75 @@ function mergeTranscriptSegments(
   for (const segment of first) byId.set(segment.id, segment);
   for (const segment of second) byId.set(segment.id, segment);
   return [...byId.values()].sort((a, b) => a.startMs - b.startMs || a.id - b.id);
+}
+
+function ScreenshotGallery({
+  meetingId,
+  screenshots,
+  active,
+}: {
+  meetingId: string;
+  screenshots: MeetingScreenshot[];
+  active: boolean;
+}) {
+  return (
+    <Card className="overflow-hidden">
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2 text-base">
+          <Images className="h-5 w-5 text-muted-foreground" aria-hidden />
+          Screenshots
+        </CardTitle>
+        <p className="mt-1 text-sm text-muted-foreground">
+          Captured automatically when the visible meeting content changes.
+        </p>
+      </CardHeader>
+
+      {screenshots.length === 0 ? (
+        <EmptyState
+          icon={Images}
+          title="No screenshots yet"
+          description={
+            active
+              ? "Screenshots will appear when the shared screen or visible content changes."
+              : "No screenshots were captured."
+          }
+          className="m-4 border-0 bg-background px-4 py-10"
+        />
+      ) : (
+        <div className="grid gap-3 p-4 sm:grid-cols-2 lg:grid-cols-3">
+          {screenshots.map((screenshot) => {
+            const src = api.meetingScreenshotUrl(meetingId, screenshot.id);
+            return (
+              <a
+                key={screenshot.id}
+                href={src}
+                target="_blank"
+                rel="noreferrer"
+                className="group overflow-hidden rounded-lg border border-border bg-background transition-colors hover:border-accent"
+              >
+                <div className="aspect-video overflow-hidden bg-black">
+                  <img
+                    src={src}
+                    alt={`Screenshot at ${formatTimestamp(screenshot.capturedAtMs)}`}
+                    loading="lazy"
+                    className="h-full w-full object-cover transition-transform duration-200 group-hover:scale-[1.02]"
+                  />
+                </div>
+                <div className="flex items-center justify-between gap-3 px-3 py-2 text-xs">
+                  <span className="font-semibold tabular-nums">
+                    {formatTimestamp(screenshot.capturedAtMs)}
+                  </span>
+                  <span className="text-muted-foreground tabular-nums">
+                    {screenshot.width}x{screenshot.height}
+                  </span>
+                </div>
+              </a>
+            );
+          })}
+        </div>
+      )}
+    </Card>
+  );
 }
 
 function BotProgressTimeline({ events }: { events: MeetingStatusEvent[] }) {
@@ -532,6 +603,12 @@ export function MeetingDetailPage() {
             </Card>
           )}
 
+          <ScreenshotGallery
+            meetingId={meeting.id}
+            screenshots={meeting.screenshots}
+            active={isBotActive(meeting.status)}
+          />
+
           <Card className="overflow-hidden">
             <CardHeader className="flex flex-wrap items-center justify-between gap-3">
               <div>
@@ -689,6 +766,10 @@ export function MeetingDetailPage() {
               <div className="flex items-center justify-between gap-3">
                 <span className="text-muted-foreground">Transcript segments</span>
                 <span className="font-semibold">{displayTranscript.length}</span>
+              </div>
+              <div className="flex items-center justify-between gap-3">
+                <span className="text-muted-foreground">Screenshots</span>
+                <span className="font-semibold">{meeting.screenshots.length}</span>
               </div>
             </div>
           </Card>

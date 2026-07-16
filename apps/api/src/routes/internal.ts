@@ -26,6 +26,14 @@ const recordingSchema = z.object({
   durationSec: z.number().int().nonnegative(),
 });
 
+const screenshotSchema = z.object({
+  objectKey: z.string().min(1),
+  capturedAtMs: z.number().int().nonnegative(),
+  width: z.number().int().positive(),
+  height: z.number().int().positive(),
+  hash: z.string().min(1),
+});
+
 async function addStatusEvent(
   meetingId: string,
   status: string,
@@ -150,5 +158,25 @@ export async function internalRoutes(app: FastifyInstance) {
       await addStatusEvent(id, "failed", `Unable to queue transcription: ${message}`);
     }
     return { ok: true };
+  });
+
+  app.post("/meetings/:id/screenshots", async (req, reply) => {
+    const { id } = req.params as { id: string };
+    const parsed = screenshotSchema.safeParse(req.body);
+    if (!parsed.success) return reply.code(400).send({ error: "Invalid request body" });
+
+    const [screenshot] = await db
+      .insert(schema.meetingScreenshots)
+      .values({
+        meetingId: id,
+        objectKey: parsed.data.objectKey,
+        capturedAtMs: parsed.data.capturedAtMs,
+        width: parsed.data.width,
+        height: parsed.data.height,
+        hash: parsed.data.hash,
+      })
+      .returning();
+
+    return { ok: true, screenshotId: screenshot.id };
   });
 }
