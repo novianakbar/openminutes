@@ -1,0 +1,14 @@
+.git
+.claude
+.codex
+.env
+.env.*
+!.env.example
+!.env.production.example
+node_modules
+dist
+apps/*/dist
+packages/*/dist
+recordings
+*.log
+.DS_Store

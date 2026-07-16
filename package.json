@@ -1,0 +1,16 @@
+{
+  "name": "openminutes",
+  "private": true,
+  "version": "0.1.0",
+  "scripts": {
+    "infra:up": "docker compose up -d postgres redis minio minio-init",
+    "infra:down": "docker compose down",
+    "dev:api": "pnpm --filter @openminutes/api dev",
+    "dev:worker": "pnpm --filter @openminutes/worker dev",
+    "dev:web": "pnpm --filter @openminutes/web dev",
+    "db:push": "pnpm --filter @openminutes/api db:push",
+    "db:seed": "pnpm --filter @openminutes/api db:seed",
+    "bot:build": "docker build -t openminutes-bot:dev apps/bot"
+  },
+  "packageManager": "pnpm@10.28.1"
+}

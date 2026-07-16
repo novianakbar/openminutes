@@ -1,0 +1,303 @@
+import { existsSync } from "node:fs";
+import { mkdir, readFile, stat, writeFile } from "node:fs/promises";
+import { chromium as vanillaChromium, type BrowserContext } from "playwright";
+import { chromium as stealthChromium } from "playwright-extra";
+import StealthPlugin from "puppeteer-extra-plugin-stealth";
+import { reportRecording, reportStatus } from "./api.js";
+import { startRecording, type Recorder } from "./audio.js";
+import { startLiveTranscriptionStream, type LiveTranscriptionStream } from "./liveTranscription.js";
+import { uploadRecording } from "./upload.js";
+import { googleMeet } from "./platforms/googleMeet.js";
+import { teams } from "./platforms/teams.js";
+import { zoom } from "./platforms/zoom.js";
+import { sleep } from "./platforms/helpers.js";
+import type { MeetingPlatform } from "./platforms/types.js";
+
+// Full stealth tidak aman dipakai sebagai default: user-agent-override bawaan
+// plugin ini memalsukan Linux menjadi Windows/Win32 dan menulis ulang client
+// hints. Teams bisa mencoba membuka app desktop lewat msteams:/xdg-open,
+// sementara Meet/Zoom dapat melihat fingerprint yang tidak konsisten.
+// Default produksi memakai Chromium vanilla + patch ringan di bawah; full
+// stealth tetap tersedia lewat BROWSER_STEALTH untuk eksperimen per platform.
+stealthChromium.use(StealthPlugin());
+
+const PLATFORMS: Record<string, MeetingPlatform> = {
+  google_meet: googleMeet,
+  teams,
+  zoom,
+};
+
+function required(key: string): string {
+  const value = process.env[key];
+  if (!value) {
+    console.error(`Environment variable ${key} is required`);
+    process.exit(1);
+  }
+  return value;
+}
+
+const cfg = {
+  meetingId: required("MEETING_ID"),
+  meetingUrl: required("MEETING_URL"),
+  platform: required("PLATFORM"),
+  mode: process.env.MODE ?? "post_meeting",
+  botName: process.env.BOT_NAME ?? "OpenMinutes Assistant",
+  joinTimeoutMs: Number(process.env.JOIN_TIMEOUT_SEC ?? "300") * 1000,
+  maxDurationMs: Number(process.env.MAX_DURATION_MIN ?? "180") * 60_000,
+};
+
+function shouldUseStealth(platform: string): boolean {
+  const override = process.env.BROWSER_STEALTH?.trim().toLowerCase();
+  if (override) {
+    if (["1", "true", "yes", "all"].includes(override)) return true;
+    if (["0", "false", "no", "none", "off"].includes(override)) return false;
+    return override
+      .split(",")
+      .map((item) => item.trim())
+      .includes(platform);
+  }
+  return false;
+}
+
+function shouldUseChromiumFakeMedia(platform: string): boolean {
+  const override = process.env.CHROMIUM_FAKE_MEDIA?.trim().toLowerCase();
+  if (override) {
+    if (["1", "true", "yes", "all"].includes(override)) return true;
+    if (["0", "false", "no", "none", "off"].includes(override)) return false;
+    return override
+      .split(",")
+      .map((item) => item.trim())
+      .includes(platform);
+  }
+  return true;
+}
+
+async function addLightFingerprintPatch(
+  context: BrowserContext,
+  platform: string,
+): Promise<void> {
+  // Meet/Teams sudah terbukti stabil dengan patch minimal ini. Jangan tambah
+  // spoof lain secara global: Meet sensitif terhadap fingerprint yang terlalu
+  // dimanipulasi dan bisa langsung menolak join.
+  await context.addInitScript(() => {
+    Object.defineProperty(navigator, "webdriver", {
+      get: () => undefined,
+      configurable: true,
+    });
+    Object.defineProperty(navigator, "plugins", {
+      get: () => [1, 2, 3, 4, 5],
+      configurable: true,
+    });
+    Object.defineProperty(navigator, "languages", {
+      get: () => ["en-US", "en"],
+      configurable: true,
+    });
+  });
+}
+
+function mediaPermissionOrigins(platform: string, meetingUrl: string): string[] {
+  const origins = new Set<string>();
+  try {
+    origins.add(new URL(meetingUrl).origin);
+  } catch {
+    // Ignore invalid URL here; validation/reporting happens elsewhere.
+  }
+
+  if (platform === "google_meet") origins.add("https://meet.google.com");
+  if (platform === "teams") {
+    origins.add("https://teams.microsoft.com");
+    origins.add("https://teams.live.com");
+  }
+  if (platform === "zoom") {
+    origins.add("https://zoom.us");
+    for (const prefix of ["us02web", "us04web", "us05web"]) {
+      origins.add(`https://${prefix}.zoom.us`);
+    }
+  }
+  return [...origins];
+}
+
+async function grantMediaPermissions(
+  context: BrowserContext,
+  platform: string,
+  meetingUrl: string,
+): Promise<void> {
+  for (const origin of mediaPermissionOrigins(platform, meetingUrl)) {
+    await context
+      .grantPermissions(["microphone", "camera"], { origin })
+      .catch(() => {});
+  }
+}
+
+const RECORDING_PATH = "/tmp/recording.ogg";
+const PROFILE_DIR = "/tmp/profile";
+
+// Media palsu "aman": fake device bawaan Chromium menghasilkan nada beep
+// (audio) & pola hijau bergerak (video) — kalau mute sampai gagal, itulah yang
+// diterima peserta. File hening & frame hitam (dibuat saat build image, lihat
+// Dockerfile) memastikan kebocoran apa pun tetap senyap. Saat dev lokal file
+// boleh tidak ada — flag dilewati dan fake device default yang dipakai.
+const fakeMediaDir = process.env.FAKE_MEDIA_DIR ?? "/app/assets";
+const silenceWav = `${fakeMediaDir}/silence.wav`;
+const blackY4m = `${fakeMediaDir}/black.y4m`;
+
+let sigterm: () => void = () => {};
+const sigtermPromise = new Promise<string>((resolve) => {
+  sigterm = () => resolve("stopped_by_api");
+});
+process.on("SIGTERM", () => sigterm());
+
+async function blockExternalAppProtocols(profileDir: string): Promise<void> {
+  // Chrome menyimpan preferensi external protocol per profile. Ini menjadi
+  // belt-and-suspenders untuk Zoom/Teams: kalau sebuah page mencoba membuka
+  // zoommtg:/ atau msteams:/, profile tidak menampilkan dialog xdg-open yang
+  // bisa memblokir Playwright.
+  const prefsPath = `${profileDir}/Default/Preferences`;
+  const prefs: Record<string, unknown> = await readFile(prefsPath, "utf8")
+    .then((raw) => JSON.parse(raw) as Record<string, unknown>)
+    .catch(() => ({} as Record<string, unknown>));
+  const protocolHandler =
+    prefs.protocol_handler && typeof prefs.protocol_handler === "object"
+      ? (prefs.protocol_handler as Record<string, unknown>)
+      : {};
+  const excludedSchemes =
+    protocolHandler.excluded_schemes &&
+    typeof protocolHandler.excluded_schemes === "object"
+      ? (protocolHandler.excluded_schemes as Record<string, unknown>)
+      : {};
+  for (const scheme of ["zoommtg", "zoomus", "zoomphonecall", "msteams"]) {
+    excludedSchemes[scheme] = true;
+  }
+  protocolHandler.excluded_schemes = excludedSchemes;
+  prefs.protocol_handler = protocolHandler;
+  await mkdir(`${profileDir}/Default`, { recursive: true });
+  await writeFile(prefsPath, JSON.stringify(prefs));
+}
+
+async function main() {
+  const platform = PLATFORMS[cfg.platform] ?? googleMeet;
+  const useStealth = shouldUseStealth(cfg.platform);
+  const chromium = useStealth ? stealthChromium : vanillaChromium;
+  const useChromiumFakeMedia = shouldUseChromiumFakeMedia(cfg.platform);
+
+  await reportStatus(cfg.meetingId, "joining");
+  await blockExternalAppProtocols(PROFILE_DIR);
+
+  const context = await chromium.launchPersistentContext(PROFILE_DIR, {
+    headless: false,
+    viewport: { width: 1280, height: 720 },
+    screen: { width: 1280, height: 720 },
+    deviceScaleFactor: 1,
+    isMobile: false,
+    hasTouch: false,
+    locale: "en-US",
+    timezoneId: process.env.TZ ?? "Asia/Jakarta",
+    extraHTTPHeaders: {
+      "Accept-Language": "en-US,en;q=0.9",
+    },
+    // Meet me-redirect Chromium Linux ke halaman marketing kalau UA-nya
+    // dianggap browser tak didukung — samarkan sebagai Chrome desktop asli.
+    userAgent:
+      "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/149.0.0.0 Safari/537.36",
+    permissions: ["microphone", "camera"],
+    args: [
+      "--no-sandbox",
+      "--autoplay-policy=no-user-gesture-required",
+      ...(useChromiumFakeMedia ? ["--use-fake-device-for-media-stream"] : []),
+      ...(useChromiumFakeMedia && existsSync(silenceWav)
+        ? [`--use-file-for-fake-audio-capture=${silenceWav}`]
+        : []),
+      ...(useChromiumFakeMedia && existsSync(blackY4m)
+        ? [`--use-file-for-fake-video-capture=${blackY4m}`]
+        : []),
+      ...(useChromiumFakeMedia ? ["--use-fake-ui-for-media-stream"] : []),
+      "--disable-blink-features=AutomationControlled",
+      "--window-size=1280,720",
+    ],
+  });
+
+  await addLightFingerprintPatch(context, cfg.platform);
+  await grantMediaPermissions(context, cfg.platform, cfg.meetingUrl);
+
+  const page = await context.newPage();
+
+  // SIGTERM harus efektif juga selama fase join (joining/waiting_admission) —
+  // tanpa race ini, "stop" dari API baru bereaksi setelah bot di-admit host.
+  const joinPromise = platform
+    .join(page, {
+      meetingUrl: cfg.meetingUrl,
+      botName: cfg.botName,
+      joinTimeoutMs: cfg.joinTimeoutMs,
+      onWaitingAdmission: () => {
+        void reportStatus(cfg.meetingId, "waiting_admission");
+      },
+    })
+    .then(() => "joined" as const);
+  // Cegah unhandled rejection bila join gagal setelah SIGTERM menang race.
+  joinPromise.catch(() => {});
+
+  const joinResult = await Promise.race([joinPromise, sigtermPromise]);
+  if (joinResult !== "joined") {
+    console.log("Stopped before recording started");
+    await reportStatus(
+      cfg.meetingId,
+      "failed",
+      "The session was stopped before joining the meeting. No recording was created.",
+    );
+    await context.close().catch(() => {});
+    return;
+  }
+
+  await reportStatus(cfg.meetingId, "recording");
+  const recorder = startRecording(RECORDING_PATH);
+  const liveTranscription =
+    cfg.mode === "realtime"
+      ? startLiveTranscriptionStream(cfg.meetingId)
+      : null;
+
+  const endReason = await Promise.race([
+    platform.waitForEnd(page),
+    sleep(cfg.maxDurationMs).then(() => "max_duration"),
+    sigtermPromise,
+  ]);
+  console.log(`Meeting ended: ${endReason}`);
+
+  await finish(recorder, liveTranscription);
+  await context.close().catch(() => {});
+}
+
+async function finish(
+  recorder: Recorder,
+  liveTranscription: LiveTranscriptionStream | null,
+) {
+  const durationSec = Math.round((Date.now() - recorder.startedAt) / 1000);
+  await liveTranscription?.stop().catch((err) => {
+    console.error("live transcription finalize gagal:", err);
+  });
+  await recorder.stop();
+  const fileSize = await stat(RECORDING_PATH)
+    .then((s) => s.size)
+    .catch(() => 0);
+  if (fileSize === 0) {
+    throw new Error(
+      "The recording file is empty or missing. Audio capture did not produce usable output " +
+        "(check PulseAudio/MeetSink in the container logs).",
+    );
+  }
+  await reportStatus(cfg.meetingId, "uploading");
+  const objectKey = await uploadRecording(cfg.meetingId, RECORDING_PATH);
+  await reportRecording(cfg.meetingId, objectKey, durationSec);
+  console.log(`Recording ${objectKey} (${durationSec}s) uploaded`);
+}
+
+main()
+  .then(() => process.exit(0))
+  .catch(async (err) => {
+    console.error(err);
+    await reportStatus(
+      cfg.meetingId,
+      "failed",
+      err instanceof Error ? err.message : String(err),
+    );
+    process.exit(1);
+  });

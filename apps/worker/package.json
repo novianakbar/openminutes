@@ -1,0 +1,25 @@
+{
+  "name": "@openminutes/worker",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "tsx watch src/index.ts",
+    "start": "tsx src/index.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@openminutes/shared": "workspace:*",
+    "bullmq": "^5.79.3",
+    "drizzle-orm": "^0.45.2",
+    "ioredis": "^5.10.1",
+    "minio": "^8.0.7",
+    "pg": "^8.22.0"
+  },
+  "devDependencies": {
+    "@types/node": "^26.1.1",
+    "@types/pg": "^8.20.0",
+    "tsx": "^4.23.0",
+    "typescript": "^6.0.3"
+  }
+}
