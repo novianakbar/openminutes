@@ -26,6 +26,7 @@ export interface Meeting {
   language: string;
   botName: string;
   status: BotStatus;
+  scheduledStartAt: string | null;
   containerId: string | null;
   audioObjectKey: string | null;
   durationSec: number | null;

@@ -65,16 +65,26 @@ export const api = {
     mode: TranscriptionMode;
     language: TranscriptionLanguage;
     botName?: string;
+    scheduledStartAt?: string;
   }) =>
     request<{
       meetingId: string;
       title: string;
       externalMeetingId: string;
       status: string;
+      scheduledStartAt?: string;
     }>("/bots", {
       method: "POST",
       body: JSON.stringify(input),
     }),
+  rescheduleMeeting: (id: string, scheduledStartAt: string) =>
+    request<{ meetingId: string; status: string; scheduledStartAt: string }>(
+      `/meetings/${id}/schedule`,
+      {
+        method: "PATCH",
+        body: JSON.stringify({ scheduledStartAt }),
+      },
+    ),
   stopBot: (id: string) =>
     request<{ meetingId: string; status: string }>(`/bots/${id}`, {
       method: "DELETE",

@@ -18,6 +18,10 @@ import {
   getStoredObject,
 } from "../services/storage";
 import { enqueueTranscription } from "../services/queue";
+import {
+  enqueueScheduledBot,
+  removeScheduledBotJob,
+} from "../services/scheduledBots";
 import { mintViewToken, VIEW_TOKEN_TTL_SEC } from "../services/viewToken";
 import { isLiveStatus } from "../services/vncProxy";
 import { subscribeLiveTranscript } from "../services/liveTranscription";
@@ -28,6 +32,11 @@ const createBotSchema = z.object({
   mode: z.enum(["post_meeting", "realtime"]).default("post_meeting"),
   language: z.enum(TRANSCRIPTION_LANGUAGE_CODES).default("id"),
   botName: z.string().min(1).max(60).default("OpenMinutes Assistant"),
+  scheduledStartAt: z.string().datetime().optional(),
+});
+
+const scheduleMeetingSchema = z.object({
+  scheduledStartAt: z.string().datetime(),
 });
 
 const listMeetingsQuerySchema = z.object({
@@ -38,6 +47,7 @@ const listMeetingsQuerySchema = z.object({
     .enum([
       "all",
       "active",
+      "scheduled",
       "pending",
       "joining",
       "waiting_admission",
@@ -113,6 +123,14 @@ export async function botRoutes(app: FastifyInstance) {
         .send({ error: "Invalid request body", details: parsed.error.flatten() });
     }
     const { meetingUrl, mode, language, botName } = parsed.data;
+    const scheduledStartAt = parsed.data.scheduledStartAt
+      ? new Date(parsed.data.scheduledStartAt)
+      : null;
+    if (scheduledStartAt && scheduledStartAt.getTime() <= Date.now()) {
+      return reply.code(400).send({
+        error: "Scheduled start time must be in the future.",
+      });
+    }
 
     const platform = detectPlatform(meetingUrl);
     if (!platform) {
@@ -142,8 +160,44 @@ export async function botRoutes(app: FastifyInstance) {
         mode,
         language,
         botName,
+        status: scheduledStartAt ? "scheduled" : "pending",
+        scheduledStartAt,
       })
       .returning();
+
+    if (scheduledStartAt) {
+      await addStatusEvent(
+        meeting.id,
+        "scheduled",
+        `Meeting scheduled for ${scheduledStartAt.toISOString()}`,
+      );
+      try {
+        await enqueueScheduledBot(meeting.id, scheduledStartAt);
+        return reply.code(201).send({
+          meetingId: meeting.id,
+          title,
+          externalMeetingId,
+          status: "scheduled",
+          platform,
+          mode,
+          language,
+          scheduledStartAt: scheduledStartAt.toISOString(),
+        });
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        await db
+          .update(schema.meetings)
+          .set({ status: "failed", error: message, updatedAt: new Date() })
+          .where(eq(schema.meetings.id, meeting.id));
+        await addStatusEvent(meeting.id, "failed", message);
+        req.log.error({ err }, "failed to schedule meeting session");
+        return reply.code(502).send({
+          meetingId: meeting.id,
+          error: `Unable to schedule meeting session: ${message}`,
+        });
+      }
+    }
+
     await addStatusEvent(meeting.id, "pending", "Meeting session created");
 
     try {
@@ -182,6 +236,54 @@ export async function botRoutes(app: FastifyInstance) {
         .code(502)
         .send({ meetingId: meeting.id, error: `Unable to start meeting session: ${message}` });
     }
+  });
+
+  app.patch("/meetings/:id/schedule", async (req, reply) => {
+    const user = (req as any).user;
+    const { id } = req.params as { id: string };
+    const parsed = scheduleMeetingSchema.safeParse(req.body);
+    if (!parsed.success) {
+      return reply
+        .code(400)
+        .send({ error: "Invalid request body", details: parsed.error.flatten() });
+    }
+
+    const scheduledStartAt = new Date(parsed.data.scheduledStartAt);
+    if (scheduledStartAt.getTime() <= Date.now()) {
+      return reply.code(400).send({
+        error: "Scheduled start time must be in the future.",
+      });
+    }
+
+    const [meeting] = await db
+      .select()
+      .from(schema.meetings)
+      .where(
+        and(eq(schema.meetings.id, id), eq(schema.meetings.userId, user.id)),
+      )
+      .limit(1);
+    if (!meeting) return reply.code(404).send({ error: "Meeting not found" });
+    if (meeting.status !== "scheduled") {
+      return reply
+        .code(409)
+        .send({ error: "Only scheduled meetings can be rescheduled" });
+    }
+
+    await db
+      .update(schema.meetings)
+      .set({ scheduledStartAt, updatedAt: new Date() })
+      .where(eq(schema.meetings.id, id));
+    await enqueueScheduledBot(id, scheduledStartAt);
+    await addStatusEvent(
+      id,
+      "scheduled",
+      `Meeting rescheduled for ${scheduledStartAt.toISOString()}`,
+    );
+    return {
+      meetingId: id,
+      status: "scheduled",
+      scheduledStartAt: scheduledStartAt.toISOString(),
+    };
   });
 
   app.get("/meetings", async (req, reply) => {
@@ -382,6 +484,10 @@ export async function botRoutes(app: FastifyInstance) {
         error:
           "Meeting is still in progress. Stop the session before deleting.",
       });
+    }
+
+    if (meeting.status === "scheduled") {
+      await removeScheduledBotJob(id);
     }
 
     if (meeting.audioObjectKey) {

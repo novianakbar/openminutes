@@ -42,6 +42,7 @@ import type {
 const TRANSCRIPT_STUCK_MS = 10 * 60 * 1000;
 
 const eventLabels: Record<string, string> = {
+  scheduled: "Meeting scheduled",
   pending: "Session created",
   joining: "Join started",
   waiting_admission: "Awaiting host approval",
@@ -508,9 +509,13 @@ export function MeetingDetailPage() {
           </div>
           <div>
             <p className="text-xs font-semibold uppercase tracking-[0.12em] text-muted-foreground">
-              Created
+              {meeting.status === "scheduled" ? "Scheduled for" : "Created"}
             </p>
-            <p className="mt-2 text-sm font-bold">{formatDateTime(meeting.createdAt)}</p>
+            <p className="mt-2 text-sm font-bold">
+              {meeting.status === "scheduled" && meeting.scheduledStartAt
+                ? formatDateTime(meeting.scheduledStartAt)
+                : formatDateTime(meeting.createdAt)}
+            </p>
           </div>
           <div>
             <p className="text-xs font-semibold uppercase tracking-[0.12em] text-muted-foreground">

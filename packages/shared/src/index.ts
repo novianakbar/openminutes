@@ -139,6 +139,7 @@ export function groupTranscriptSegments(
 }
 
 export type BotStatus =
+  | "scheduled"
   | "pending"
   | "joining"
   | "waiting_admission"

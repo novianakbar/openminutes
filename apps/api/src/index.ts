@@ -7,6 +7,7 @@ import { adminRoutes } from "./routes/admin";
 import { botRoutes } from "./routes/bots";
 import { internalRoutes } from "./routes/internal";
 import { vncProxyRoutes } from "./services/vncProxy";
+import { startScheduledBotService } from "./services/scheduledBots";
 
 const app = Fastify({ logger: true });
 
@@ -37,6 +38,8 @@ app.register(botRoutes, { prefix: "/api" });
 app.register(vncProxyRoutes, { prefix: "/api" });
 app.register(adminRoutes, { prefix: "/api/admin" });
 app.register(internalRoutes, { prefix: "/internal" });
+
+startScheduledBotService();
 
 app
   .listen({ port: config.port, host: "0.0.0.0" })

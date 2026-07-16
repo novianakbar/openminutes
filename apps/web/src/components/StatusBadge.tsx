@@ -7,6 +7,10 @@ interface StatusConfig {
 }
 
 const STATUS: Record<BotStatus, StatusConfig> = {
+  scheduled: {
+    label: "Scheduled",
+    className: "bg-info/15 text-info",
+  },
   pending: {
     label: "Queued",
     className: "bg-muted-foreground/10 text-muted-foreground",

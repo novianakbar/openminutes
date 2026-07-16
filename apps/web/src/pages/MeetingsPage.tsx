@@ -32,6 +32,7 @@ import { StatCard } from "../components/ui/StatCard";
 const statusFilters = [
   ["all", "All statuses"],
   ["active", "Active"],
+  ["scheduled", "Scheduled"],
   ["waiting_admission", "Awaiting approval"],
   ["processing_transcript", "Transcribing"],
   ["completed", "Completed"],
@@ -45,6 +46,7 @@ function getAttention(meeting: {
   status: string;
   error: string | null;
   updatedAt: string;
+  scheduledStartAt: string | null;
 }) {
   if (meeting.status === "failed") {
     return {
@@ -58,6 +60,15 @@ function getAttention(meeting: {
       label: "Needs approval",
       detail: "Host approval required",
       tone: "text-warning bg-warning/10",
+    };
+  }
+  if (meeting.status === "scheduled") {
+    return {
+      label: "Scheduled",
+      detail: meeting.scheduledStartAt
+        ? formatDateTime(meeting.scheduledStartAt)
+        : "Waiting for scheduled time",
+      tone: "text-info bg-info/10",
     };
   }
   if (
@@ -271,6 +282,11 @@ export function MeetingsPage() {
                             <span className="max-w-[220px] truncate tabular-nums">
                               Meeting ID: {meeting.externalMeetingId}
                             </span>
+                            {meeting.scheduledStartAt && (
+                              <span className="max-w-[240px] truncate tabular-nums">
+                                Scheduled: {formatDateTime(meeting.scheduledStartAt)}
+                              </span>
+                            )}
                           </p>
                         </td>
                         <td className="px-4 py-4">
@@ -307,7 +323,9 @@ export function MeetingsPage() {
                           </div>
                         </td>
                         <td className="px-4 py-4 text-muted-foreground tabular-nums">
-                          {formatDateTime(meeting.updatedAt)}
+                          {meeting.status === "scheduled" && meeting.scheduledStartAt
+                            ? formatDateTime(meeting.scheduledStartAt)
+                            : formatDateTime(meeting.updatedAt)}
                         </td>
                         <td className="px-4 py-4 text-right">
                           <Button

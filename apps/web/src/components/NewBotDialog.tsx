@@ -1,11 +1,21 @@
 import { useEffect, useState, type FormEvent } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { Check, Bot, Loader2, Plus, Search, X } from "lucide-react";
+import {
+  CalendarClock,
+  Check,
+  ChevronLeft,
+  ChevronRight,
+  Bot,
+  Loader2,
+  Plus,
+  Search,
+  X,
+} from "lucide-react";
 import { TRANSCRIPTION_LANGUAGES } from "@openminutes/shared";
 import { api, ApiError } from "../lib/api";
 import type { TranscriptionLanguage, TranscriptionMode } from "../lib/types";
 import { Button } from "./ui/Button";
-import { Field, Input } from "./ui/Field";
+import { Field, Input, Select } from "./ui/Field";
 import { Alert } from "./ui/Alert";
 import { cn } from "../lib/cn";
 
@@ -13,6 +23,295 @@ function languageLabel(code: TranscriptionLanguage): string {
   return (
     TRANSCRIPTION_LANGUAGES.find((language) => language.code === code)?.label ??
     code
+  );
+}
+
+const MINUTE_STEP = 5;
+const dayNames = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+
+function roundUpToStep(date: Date, stepMinutes = MINUTE_STEP): Date {
+  const next = new Date(date);
+  next.setSeconds(0, 0);
+  const remainder = next.getMinutes() % stepMinutes;
+  if (remainder > 0) {
+    next.setMinutes(next.getMinutes() + stepMinutes - remainder);
+  }
+  return next;
+}
+
+function defaultScheduledDate(): Date {
+  return roundUpToStep(new Date(Date.now() + 15 * 60 * 1000));
+}
+
+function startOfDay(date: Date): Date {
+  const next = new Date(date);
+  next.setHours(0, 0, 0, 0);
+  return next;
+}
+
+function isSameDay(first: Date, second: Date): boolean {
+  return startOfDay(first).getTime() === startOfDay(second).getTime();
+}
+
+function isPastDay(date: Date): boolean {
+  return startOfDay(date).getTime() < startOfDay(new Date()).getTime();
+}
+
+function setDatePart(value: Date, date: Date): Date {
+  const next = new Date(value);
+  next.setFullYear(date.getFullYear(), date.getMonth(), date.getDate());
+  return next;
+}
+
+function setTimePart(value: Date, hour: number, minute: number): Date {
+  const next = new Date(value);
+  next.setHours(hour, minute, 0, 0);
+  return next;
+}
+
+function formatMonth(date: Date): string {
+  return date.toLocaleDateString(undefined, {
+    month: "long",
+    year: "numeric",
+  });
+}
+
+function formatScheduleSummary(date: Date): string {
+  return date.toLocaleString(undefined, {
+    weekday: "short",
+    day: "numeric",
+    month: "short",
+    year: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+}
+
+function SchedulePicker({
+  value,
+  onChange,
+}: {
+  value: Date;
+  onChange: (value: Date) => void;
+}) {
+  const [viewMonth, setViewMonth] = useState(
+    () => new Date(value.getFullYear(), value.getMonth(), 1),
+  );
+  const [minuteDraft, setMinuteDraft] = useState(String(value.getMinutes()));
+  const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+  const selectedInPast = value.getTime() <= Date.now();
+  const parsedMinute = Number(minuteDraft);
+  const minuteInvalid =
+    minuteDraft.trim() === "" ||
+    !Number.isInteger(parsedMinute) ||
+    parsedMinute < 0 ||
+    parsedMinute > 59;
+  const firstDay = new Date(viewMonth.getFullYear(), viewMonth.getMonth(), 1);
+  const daysInMonth = new Date(
+    viewMonth.getFullYear(),
+    viewMonth.getMonth() + 1,
+    0,
+  ).getDate();
+  const calendarDays = [
+    ...Array.from({ length: firstDay.getDay() }, () => null),
+    ...Array.from(
+      { length: daysInMonth },
+      (_, index) =>
+        new Date(viewMonth.getFullYear(), viewMonth.getMonth(), index + 1),
+    ),
+  ];
+
+  const quickChoices = [
+    {
+      label: "In 15 min",
+      getDate: () => roundUpToStep(new Date(Date.now() + 15 * 60 * 1000)),
+    },
+    {
+      label: "In 30 min",
+      getDate: () => roundUpToStep(new Date(Date.now() + 30 * 60 * 1000)),
+    },
+    {
+      label: "In 1 hour",
+      getDate: () => roundUpToStep(new Date(Date.now() + 60 * 60 * 1000)),
+    },
+    {
+      label: "Tomorrow 9:00",
+      getDate: () => {
+        const next = new Date();
+        next.setDate(next.getDate() + 1);
+        next.setHours(9, 0, 0, 0);
+        return next;
+      },
+    },
+  ];
+
+  function applyDate(date: Date) {
+    const next = setDatePart(value, date);
+    const safeNext = next.getTime() <= Date.now() ? defaultScheduledDate() : next;
+    onChange(safeNext);
+    setMinuteDraft(String(safeNext.getMinutes()));
+  }
+
+  function applyQuickChoice(date: Date) {
+    onChange(date);
+    setMinuteDraft(String(date.getMinutes()));
+    setViewMonth(new Date(date.getFullYear(), date.getMonth(), 1));
+  }
+
+  function applyMinute(rawValue: string) {
+    if (!/^\d{0,2}$/.test(rawValue)) return;
+    setMinuteDraft(rawValue);
+
+    const minute = Number(rawValue);
+    if (rawValue.trim() !== "" && Number.isInteger(minute) && minute <= 59) {
+      onChange(setTimePart(value, value.getHours(), minute));
+    }
+  }
+
+  return (
+    <div className="rounded-lg border border-border bg-background p-3">
+      <div className="grid gap-2 sm:grid-cols-4">
+        {quickChoices.map((choice) => (
+          <button
+            key={choice.label}
+            type="button"
+            className="h-9 rounded-md border border-border px-2 text-xs font-bold text-muted-foreground transition-colors hover:border-accent hover:bg-accent/10 hover:text-accent focus-visible:outline-2 focus-visible:outline-accent"
+            onClick={() => applyQuickChoice(choice.getDate())}
+          >
+            {choice.label}
+          </button>
+        ))}
+      </div>
+
+      <div className="mt-3 grid gap-4 lg:grid-cols-[minmax(0,1fr)_210px]">
+        <div>
+          <div className="mb-2 flex items-center justify-between gap-2">
+            <button
+              type="button"
+              className="inline-flex h-8 w-8 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-surface-hover hover:text-foreground focus-visible:outline-2 focus-visible:outline-accent"
+              aria-label="Previous month"
+              onClick={() =>
+                setViewMonth(
+                  new Date(viewMonth.getFullYear(), viewMonth.getMonth() - 1, 1),
+                )
+              }
+            >
+              <ChevronLeft className="h-4 w-4" aria-hidden />
+            </button>
+            <p className="text-sm font-bold">{formatMonth(viewMonth)}</p>
+            <button
+              type="button"
+              className="inline-flex h-8 w-8 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-surface-hover hover:text-foreground focus-visible:outline-2 focus-visible:outline-accent"
+              aria-label="Next month"
+              onClick={() =>
+                setViewMonth(
+                  new Date(viewMonth.getFullYear(), viewMonth.getMonth() + 1, 1),
+                )
+              }
+            >
+              <ChevronRight className="h-4 w-4" aria-hidden />
+            </button>
+          </div>
+
+          <div className="grid grid-cols-7 gap-1 text-center">
+            {dayNames.map((day) => (
+              <span
+                key={day}
+                className="py-1 text-[11px] font-bold uppercase text-muted-foreground"
+              >
+                {day}
+              </span>
+            ))}
+            {calendarDays.map((date, index) =>
+              date ? (
+                <button
+                  key={date.toISOString()}
+                  type="button"
+                  disabled={isPastDay(date)}
+                  className={cn(
+                    "h-9 rounded-md text-sm font-bold transition-colors focus-visible:outline-2 focus-visible:outline-accent disabled:cursor-default disabled:opacity-30",
+                    isSameDay(date, value)
+                      ? "bg-accent text-accent-foreground"
+                      : "text-foreground hover:bg-surface-hover",
+                    isSameDay(date, new Date()) &&
+                      !isSameDay(date, value) &&
+                      "ring-1 ring-accent/40",
+                  )}
+                  onClick={() => applyDate(date)}
+                >
+                  {date.getDate()}
+                </button>
+              ) : (
+                <span key={`blank-${index}`} className="h-9" />
+              ),
+            )}
+          </div>
+        </div>
+
+        <div className="space-y-3">
+          <div className="grid grid-cols-2 gap-2">
+            <Field id="schedule-hour" label="Hour">
+              <Select
+                id="schedule-hour"
+                value={String(value.getHours())}
+                onChange={(event) =>
+                  onChange(
+                    setTimePart(value, Number(event.target.value), value.getMinutes()),
+                  )
+                }
+              >
+                {Array.from({ length: 24 }, (_, hour) => (
+                  <option key={hour} value={hour}>
+                    {String(hour).padStart(2, "0")}
+                  </option>
+                ))}
+              </Select>
+            </Field>
+            <Field id="schedule-minute" label="Minute">
+              <Input
+                id="schedule-minute"
+                type="number"
+                inputMode="numeric"
+                min={0}
+                max={59}
+                step={1}
+                required
+                value={minuteDraft}
+                onChange={(event) => applyMinute(event.target.value)}
+                onBlur={() => {
+                  if (!minuteInvalid) setMinuteDraft(String(parsedMinute));
+                }}
+                aria-invalid={minuteInvalid}
+                className={minuteInvalid ? "border-destructive" : undefined}
+              />
+            </Field>
+          </div>
+
+          {minuteInvalid && (
+            <p className="text-xs font-semibold text-destructive">
+              Minute must be between 0 and 59.
+            </p>
+          )}
+
+          <div
+            className={cn(
+              "rounded-lg border px-3 py-2 text-sm",
+              selectedInPast
+                ? "border-destructive/40 bg-destructive/10 text-destructive"
+                : "border-info/30 bg-info/10 text-foreground",
+            )}
+          >
+            <p className="text-xs font-semibold uppercase text-muted-foreground">
+              Bot join time
+            </p>
+            <p className="mt-1 font-bold">{formatScheduleSummary(value)}</p>
+            <p className="mt-1 text-xs text-muted-foreground">
+              Timezone: {timezone}
+            </p>
+          </div>
+        </div>
+      </div>
+    </div>
   );
 }
 
@@ -128,6 +427,9 @@ export function NewBotDialog() {
   const [botName, setBotName] = useState("OpenMinutes Assistant");
   const [mode, setMode] = useState<TranscriptionMode>("post_meeting");
   const [language, setLanguage] = useState<TranscriptionLanguage>("id");
+  const [joinTiming, setJoinTiming] = useState<"now" | "scheduled">("now");
+  const [scheduledAt, setScheduledAt] = useState(defaultScheduledDate);
+  const [scheduleError, setScheduleError] = useState<string | null>(null);
   const queryClient = useQueryClient();
 
   const mutation = useMutation({
@@ -138,6 +440,9 @@ export function NewBotDialog() {
       setMeetingUrl("");
       setTitle("");
       setLanguage("id");
+      setJoinTiming("now");
+      setScheduledAt(defaultScheduledDate());
+      setScheduleError(null);
     },
   });
 
@@ -152,13 +457,22 @@ export function NewBotDialog() {
 
   function handleSubmit(e: FormEvent) {
     e.preventDefault();
+    setScheduleError(null);
     const trimmedTitle = title.trim();
+    const scheduledStartAt = joinTiming === "scheduled" ? scheduledAt : null;
+    if (scheduledStartAt && scheduledStartAt.getTime() <= Date.now()) {
+      setScheduleError("Choose a future date and time.");
+      return;
+    }
     mutation.mutate({
       meetingUrl: meetingUrl.trim(),
       ...(trimmedTitle ? { title: trimmedTitle } : {}),
       mode,
       language,
       botName,
+      ...(scheduledStartAt
+        ? { scheduledStartAt: scheduledStartAt.toISOString() }
+        : {}),
     });
   }
 
@@ -166,12 +480,28 @@ export function NewBotDialog() {
     if (!mutation.isPending) {
       setOpen(false);
       mutation.reset();
+      setScheduleError(null);
     }
   }
 
+  function openDialog() {
+    setScheduledAt(defaultScheduledDate());
+    setScheduleError(null);
+    setOpen(true);
+  }
+
+  const submitLabel =
+    joinTiming === "scheduled"
+      ? mutation.isPending
+        ? "Scheduling..."
+        : "Schedule meeting"
+      : mutation.isPending
+        ? "Joining..."
+        : "Join meeting";
+
   return (
     <>
-      <Button type="button" onClick={() => setOpen(true)}>
+      <Button type="button" onClick={openDialog}>
         <Plus className="h-4 w-4" aria-hidden />
         Join meeting
       </Button>
@@ -186,7 +516,7 @@ export function NewBotDialog() {
             role="dialog"
             aria-modal="true"
             aria-labelledby="new-bot-title"
-            className="w-full max-w-lg rounded-xl border border-border bg-surface text-left shadow-xl"
+            className="max-h-[calc(100vh-2rem)] w-full max-w-2xl overflow-y-auto rounded-xl border border-border bg-surface text-left shadow-xl"
             onClick={(e) => e.stopPropagation()}
           >
             <div className="flex items-start justify-between gap-4 border-b border-border px-6 py-5">
@@ -275,6 +605,58 @@ export function NewBotDialog() {
 
               <fieldset>
                 <legend className="mb-1.5 text-sm font-semibold">
+                  Join timing
+                </legend>
+                <div className="grid gap-2 sm:grid-cols-2">
+                  {(
+                    [
+                      ["now", "Join now", "Start the bot as soon as this form is submitted."],
+                      ["scheduled", "Schedule", "Start the bot automatically at a future time."],
+                    ] as const
+                  ).map(([value, label, description]) => (
+                    <label
+                      key={value}
+                      className={cn(
+                        "cursor-pointer rounded-lg border p-3 text-sm transition-colors duration-200",
+                        joinTiming === value
+                          ? "border-accent bg-accent/10 text-accent"
+                          : "border-border text-muted-foreground hover:bg-surface-hover hover:text-foreground",
+                      )}
+                    >
+                      <input
+                        type="radio"
+                        name="join-timing"
+                        value={value}
+                        checked={joinTiming === value}
+                        onChange={() => setJoinTiming(value)}
+                        className="sr-only"
+                      />
+                      <span className="flex items-center gap-2 font-bold">
+                        {value === "scheduled" && (
+                          <CalendarClock className="h-4 w-4" aria-hidden />
+                        )}
+                        {label}
+                      </span>
+                      <span className="mt-1 block text-xs leading-5 text-muted-foreground">
+                        {description}
+                      </span>
+                    </label>
+                  ))}
+                </div>
+              </fieldset>
+
+              {joinTiming === "scheduled" && (
+                <Field
+                  id="scheduled-start-at"
+                  label="Scheduled join time"
+                  hint="Pick when the bot should enter the meeting room."
+                >
+                  <SchedulePicker value={scheduledAt} onChange={setScheduledAt} />
+                </Field>
+              )}
+
+              <fieldset>
+                <legend className="mb-1.5 text-sm font-semibold">
                   Transcription mode
                 </legend>
                 <div className="grid gap-2 sm:grid-cols-2">
@@ -310,6 +692,12 @@ export function NewBotDialog() {
                 </div>
               </fieldset>
 
+              {scheduleError && (
+                <Alert tone="danger" role="alert">
+                  {scheduleError}
+                </Alert>
+              )}
+
               {mutation.isError && (
                 <Alert tone="danger" role="alert">
                   {mutation.error instanceof ApiError
@@ -326,7 +714,7 @@ export function NewBotDialog() {
                   {mutation.isPending && (
                     <Loader2 className="h-4 w-4 animate-spin" aria-hidden />
                   )}
-                  {mutation.isPending ? "Joining..." : "Join meeting"}
+                  {submitLabel}
                 </Button>
               </div>
             </form>

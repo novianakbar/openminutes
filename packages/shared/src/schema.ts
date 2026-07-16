@@ -116,6 +116,7 @@ export const meetings = pgTable("meetings", {
   language: text("language").notNull().default("id"),
   botName: text("bot_name").notNull(),
   status: text("status").notNull().default("pending"),
+  scheduledStartAt: timestamp("scheduled_start_at"),
   containerId: text("container_id"),
   audioObjectKey: text("audio_object_key"),
   durationSec: integer("duration_sec"),
