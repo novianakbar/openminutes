@@ -96,6 +96,7 @@ make up
 make setup      # install/check host dependencies and create .env if missing
 make build      # build api, worker, web, and bot images
 make up         # start infra, push schema, seed admin, then start app services
+make update     # rebuild images, push schema, seed admin, then recreate app services
 make down       # stop the stack
 make logs       # follow service logs
 make ps         # show service status
