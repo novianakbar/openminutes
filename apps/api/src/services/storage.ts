@@ -39,6 +39,16 @@ export async function getRecording(
   return getStoredObject(objectKey);
 }
 
+export async function putStoredObject(
+  objectKey: string,
+  buffer: Buffer,
+  contentType: string,
+): Promise<void> {
+  await minio.putObject(config.minio.bucket, objectKey, buffer, buffer.length, {
+    "Content-Type": contentType,
+  });
+}
+
 export async function deleteStoredObject(objectKey: string): Promise<void> {
   try {
     await minio.removeObject(config.minio.bucket, objectKey);

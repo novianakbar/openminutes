@@ -11,9 +11,10 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@openminutes/shared": "workspace:*",
     "@better-auth/api-key": "^1.6.23",
+    "@fastify/multipart": "^10.1.0",
     "@fastify/websocket": "^11.3.0",
+    "@openminutes/shared": "workspace:*",
     "better-auth": "^1.6.23",
     "bullmq": "^5.79.3",
     "dockerode": "^5.0.1",

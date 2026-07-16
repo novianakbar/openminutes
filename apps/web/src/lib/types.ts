@@ -1,15 +1,19 @@
 import type {
+  AudioSummaryStatus,
   BotStatus,
   Platform,
   RealtimeTranscriptStatus,
+  SummaryStatus,
   TranscriptionLanguage,
   TranscriptionMode,
 } from "@openminutes/shared";
 
 export type {
+  AudioSummaryStatus,
   BotStatus,
   Platform,
   RealtimeTranscriptStatus,
+  SummaryStatus,
   TranscriptionLanguage,
   TranscriptionMode,
 };
@@ -56,6 +60,51 @@ export interface TranscriptSegment {
   text: string;
 }
 
+export interface AudioSummaryTranscriptSegment {
+  id: number;
+  audioSummaryId: string;
+  startMs: number;
+  endMs: number;
+  speaker: string | null;
+  text: string;
+}
+
+export interface Summary {
+  id: string;
+  sourceType: "meeting" | "audio_summary";
+  sourceId: string;
+  templateKey: string;
+  status: SummaryStatus;
+  content: string | null;
+  model: string | null;
+  error: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface AudioSummary {
+  id: string;
+  userId: string;
+  title: string;
+  language: string;
+  status: AudioSummaryStatus;
+  audioObjectKey: string;
+  originalFilename: string;
+  mimeType: string;
+  sizeBytes: number;
+  durationSec: number | null;
+  error: string | null;
+  createdAt: string;
+  updatedAt: string;
+  transcriptCount?: number;
+  summary?: Summary | null;
+}
+
+export interface AudioSummaryDetail extends AudioSummary {
+  transcript: AudioSummaryTranscriptSegment[];
+  summary: Summary | null;
+}
+
 export interface MeetingScreenshot {
   id: number;
   meetingId: string;
@@ -97,5 +146,18 @@ export interface MeetingListResponse {
     active: number;
     waiting: number;
     transcribing: number;
+  };
+}
+
+export interface AudioSummaryListResponse {
+  items: AudioSummary[];
+  total: number;
+  page: number;
+  pageSize: number;
+  totalPages: number;
+  stats: {
+    total: number;
+    transcribing: number;
+    completed: number;
   };
 }

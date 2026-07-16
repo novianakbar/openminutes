@@ -5,6 +5,7 @@ import {
   serial,
   text,
   timestamp,
+  uniqueIndex,
   uuid,
 } from "drizzle-orm/pg-core";
 
@@ -103,6 +104,15 @@ export const appSettings = pgTable("app_settings", {
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
 });
 
+// Konfigurasi AI summary global (satu baris, id selalu 1), diatur admin dari UI.
+export const summarySettings = pgTable("summary_settings", {
+  id: integer("id").primaryKey().default(1),
+  apiKey: text("api_key"),
+  baseUrl: text("base_url"),
+  model: text("model"),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+});
+
 export const meetings = pgTable("meetings", {
   id: uuid("id").defaultRandom().primaryKey(),
   userId: text("user_id")
@@ -128,6 +138,24 @@ export const meetings = pgTable("meetings", {
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
 });
 
+export const audioSummaries = pgTable("audio_summaries", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  userId: text("user_id")
+    .references(() => user.id)
+    .notNull(),
+  title: text("title").notNull(),
+  language: text("language").notNull().default("id"),
+  status: text("status").notNull().default("pending"),
+  audioObjectKey: text("audio_object_key").notNull(),
+  originalFilename: text("original_filename").notNull(),
+  mimeType: text("mime_type").notNull(),
+  sizeBytes: integer("size_bytes").notNull(),
+  durationSec: integer("duration_sec"),
+  error: text("error"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+});
+
 export const meetingStatusEvents = pgTable("meeting_status_events", {
   id: serial("id").primaryKey(),
   meetingId: uuid("meeting_id")
@@ -148,6 +176,40 @@ export const transcriptSegments = pgTable("transcript_segments", {
   speaker: text("speaker"),
   text: text("text").notNull(),
 });
+
+export const audioSummaryTranscriptSegments = pgTable("audio_summary_transcript_segments", {
+  id: serial("id").primaryKey(),
+  audioSummaryId: uuid("audio_summary_id")
+    .references(() => audioSummaries.id)
+    .notNull(),
+  startMs: integer("start_ms").notNull(),
+  endMs: integer("end_ms").notNull(),
+  speaker: text("speaker"),
+  text: text("text").notNull(),
+});
+
+export const summaries = pgTable(
+  "summaries",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    sourceType: text("source_type").notNull(),
+    sourceId: uuid("source_id").notNull(),
+    templateKey: text("template_key").notNull().default("default"),
+    status: text("status").notNull().default("pending"),
+    content: text("content"),
+    model: text("model"),
+    error: text("error"),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at").defaultNow().notNull(),
+  },
+  (table) => [
+    uniqueIndex("summaries_source_template_idx").on(
+      table.sourceType,
+      table.sourceId,
+      table.templateKey,
+    ),
+  ],
+);
 
 export const meetingScreenshots = pgTable("meeting_screenshots", {
   id: serial("id").primaryKey(),

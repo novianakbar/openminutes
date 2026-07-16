@@ -1,10 +1,12 @@
 import type {
+  AudioSummaryDetail,
+  AudioSummaryListResponse,
   MeetingDetail,
   MeetingListResponse,
   TranscriptionLanguage,
   TranscriptionMode,
 } from "./types";
-import type { TranscriptionSettings } from "@openminutes/shared";
+import type { SummarySettings, TranscriptionSettings } from "@openminutes/shared";
 
 export class ApiError extends Error {
   constructor(
@@ -58,6 +60,56 @@ export const api = {
     const suffix = query.size ? `?${query.toString()}` : "";
     return request<MeetingListResponse>(`/meetings${suffix}`);
   },
+  listAudioSummaries: (params?: {
+    page?: number;
+    pageSize?: number;
+    search?: string;
+    status?: string;
+  }) => {
+    const query = new URLSearchParams();
+    if (params?.page) query.set("page", String(params.page));
+    if (params?.pageSize) query.set("pageSize", String(params.pageSize));
+    if (params?.search) query.set("search", params.search);
+    if (params?.status && params.status !== "all") {
+      query.set("status", params.status);
+    }
+    const suffix = query.size ? `?${query.toString()}` : "";
+    return request<AudioSummaryListResponse>(`/audio-summaries${suffix}`);
+  },
+  getAudioSummary: (id: string) =>
+    request<AudioSummaryDetail>(`/audio-summaries/${id}`),
+  uploadAudioSummary: async (input: {
+    file: File;
+    title?: string;
+    language: TranscriptionLanguage;
+  }) => {
+    const formData = new FormData();
+    formData.set("file", input.file);
+    formData.set("language", input.language);
+    if (input.title?.trim()) formData.set("title", input.title.trim());
+    const res = await fetch("/api/audio-summaries", {
+      method: "POST",
+      body: formData,
+    });
+    if (!res.ok) {
+      throw await parseError(res, `Unable to upload audio (${res.status})`);
+    }
+    return res.json() as Promise<AudioSummaryDetail>;
+  },
+  deleteAudioSummary: (id: string) =>
+    request<{ audioSummaryId: string; deleted: true }>(`/audio-summaries/${id}`, {
+      method: "DELETE",
+    }),
+  retranscribeAudioSummary: (id: string) =>
+    request<{ audioSummaryId: string; status: string }>(
+      `/audio-summaries/${id}/transcribe`,
+      { method: "POST" },
+    ),
+  summarizeAudioSummary: (id: string) =>
+    request<{ audioSummaryId: string; status: string }>(
+      `/audio-summaries/${id}/summarize`,
+      { method: "POST" },
+    ),
   getMeeting: (id: string) => request<MeetingDetail>(`/meetings/${id}`),
   createBot: (input: {
     meetingUrl: string;
@@ -110,8 +162,22 @@ export const api = {
       method: "PUT",
       body: JSON.stringify(settings),
     }),
+  getSummarySettings: () =>
+    request<SummarySettings>("/admin/summary-settings"),
+  saveSummarySettings: (settings: SummarySettings) =>
+    request<SummarySettings>("/admin/summary-settings", {
+      method: "PUT",
+      body: JSON.stringify(settings),
+    }),
   fetchAudioBlob: async (id: string): Promise<Blob> => {
     const res = await fetch(`/api/meetings/${id}/audio`);
+    if (!res.ok) {
+      throw await parseError(res, `Unable to fetch audio (${res.status})`);
+    }
+    return res.blob();
+  },
+  fetchAudioSummaryBlob: async (id: string): Promise<Blob> => {
+    const res = await fetch(`/api/audio-summaries/${id}/audio`);
     if (!res.ok) {
       throw await parseError(res, `Unable to fetch audio (${res.status})`);
     }

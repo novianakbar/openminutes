@@ -1,9 +1,11 @@
 import Fastify from "fastify";
+import multipart from "@fastify/multipart";
 import websocket from "@fastify/websocket";
 import { fromNodeHeaders } from "better-auth/node";
 import { auth } from "./auth";
 import { config } from "./config";
 import { adminRoutes } from "./routes/admin";
+import { audioSummaryRoutes } from "./routes/audioSummaries";
 import { botRoutes } from "./routes/bots";
 import { internalRoutes } from "./routes/internal";
 import { vncProxyRoutes } from "./services/vncProxy";
@@ -12,6 +14,7 @@ import { startScheduledBotService } from "./services/scheduledBots";
 const app = Fastify({ logger: true });
 
 app.register(websocket);
+app.register(multipart);
 
 app.get("/health", async () => ({ ok: true }));
 app.get("/api/health", async () => ({ ok: true }));
@@ -35,6 +38,7 @@ app.route({
 });
 
 app.register(botRoutes, { prefix: "/api" });
+app.register(audioSummaryRoutes, { prefix: "/api" });
 app.register(vncProxyRoutes, { prefix: "/api" });
 app.register(adminRoutes, { prefix: "/api/admin" });
 app.register(internalRoutes, { prefix: "/internal" });

@@ -1,9 +1,10 @@
 import {
   KeyRound,
+  FileAudio,
   ListVideo,
   Mic,
-  Settings,
   Shield,
+  Sparkles,
   type LucideIcon,
 } from "lucide-react";
 
@@ -21,6 +22,12 @@ export const navItems: NavItem[] = [
     label: "Meetings",
     description: "Recordings, transcripts, and meeting status",
     icon: ListVideo,
+  },
+  {
+    to: "/summaries",
+    label: "Summaries",
+    description: "Upload audio, transcripts, and manual summaries",
+    icon: FileAudio,
   },
   {
     to: "/settings",
@@ -42,6 +49,13 @@ export const navItems: NavItem[] = [
     icon: Mic,
     adminOnly: true,
   },
+  {
+    to: "/admin/summary",
+    label: "AI Summary",
+    description: "Summary model provider",
+    icon: Sparkles,
+    adminOnly: true,
+  },
 ];
 
 export function getVisibleNavItems(isAdmin: boolean) {
@@ -59,6 +73,12 @@ export function getPageMeta(pathname: string) {
     return {
       title: "Meeting Detail",
       description: "Recording, transcript, and session status.",
+    };
+  }
+  if (pathname.startsWith("/summaries/")) {
+    return {
+      title: "Summary Detail",
+      description: "Audio, transcript, and generated summary.",
     };
   }
 

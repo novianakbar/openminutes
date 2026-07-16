@@ -11,6 +11,12 @@ export interface TranscriptionSettings {
   language: string;
 }
 
+export interface SummarySettings {
+  apiKey: string | null;
+  baseUrl: string | null;
+  model: string | null;
+}
+
 export type Platform = "google_meet" | "teams" | "zoom";
 export type TranscriptionMode = "post_meeting" | "realtime";
 export const TRANSCRIPTION_LANGUAGES = [
@@ -148,6 +154,19 @@ export type BotStatus =
   | "processing_transcript"
   | "completed"
   | "transcription_skipped"
+  | "failed";
+
+export type AudioSummaryStatus =
+  | "pending"
+  | "processing_transcript"
+  | "completed"
+  | "transcription_skipped"
+  | "failed";
+
+export type SummaryStatus =
+  | "pending"
+  | "processing"
+  | "completed"
   | "failed";
 
 export function detectPlatform(meetingUrl: string): Platform | null {

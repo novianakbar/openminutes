@@ -12,12 +12,24 @@ const settingsSchema = z.object({
   language: z.string().min(2).max(10).default("id"),
 });
 
+const summarySettingsSchema = z.object({
+  apiKey: z.string().nullable().default(null),
+  baseUrl: z.string().url().nullable().default(null),
+  model: z.string().nullable().default(null),
+});
+
 const defaultSettings = {
   provider: "deepgram",
   apiKey: null,
   baseUrl: null,
   model: null,
   language: "id",
+};
+
+const defaultSummarySettings = {
+  apiKey: null,
+  baseUrl: null,
+  model: null,
 };
 
 export async function adminRoutes(app: FastifyInstance) {
@@ -52,6 +64,30 @@ export async function adminRoutes(app: FastifyInstance) {
       .values({ id: 1, ...parsed.data, updatedAt: new Date() })
       .onConflictDoUpdate({
         target: schema.appSettings.id,
+        set: { ...parsed.data, updatedAt: new Date() },
+    });
+    return parsed.data;
+  });
+
+  app.get("/summary-settings", async () => {
+    const [row] = await db.select().from(schema.summarySettings).limit(1);
+    if (!row) return defaultSummarySettings;
+    const { id: _id, updatedAt: _updatedAt, ...settings } = row;
+    return settings;
+  });
+
+  app.put("/summary-settings", async (req, reply) => {
+    const parsed = summarySettingsSchema.safeParse(req.body);
+    if (!parsed.success) {
+      return reply
+        .code(400)
+        .send({ error: "Invalid request body", details: parsed.error.flatten() });
+    }
+    await db
+      .insert(schema.summarySettings)
+      .values({ id: 1, ...parsed.data, updatedAt: new Date() })
+      .onConflictDoUpdate({
+        target: schema.summarySettings.id,
         set: { ...parsed.data, updatedAt: new Date() },
       });
     return parsed.data;
