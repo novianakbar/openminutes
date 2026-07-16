@@ -32,6 +32,7 @@ const createBotSchema = z.object({
   mode: z.enum(["post_meeting", "realtime"]).default("post_meeting"),
   language: z.enum(TRANSCRIPTION_LANGUAGE_CODES).default("id"),
   botName: z.string().min(1).max(60).default("OpenMinutes Assistant"),
+  captureScreenshots: z.boolean().default(true),
   scheduledStartAt: z.string().datetime().optional(),
 });
 
@@ -122,7 +123,7 @@ export async function botRoutes(app: FastifyInstance) {
         .code(400)
         .send({ error: "Invalid request body", details: parsed.error.flatten() });
     }
-    const { meetingUrl, mode, language, botName } = parsed.data;
+    const { meetingUrl, mode, language, botName, captureScreenshots } = parsed.data;
     const scheduledStartAt = parsed.data.scheduledStartAt
       ? new Date(parsed.data.scheduledStartAt)
       : null;
@@ -160,6 +161,7 @@ export async function botRoutes(app: FastifyInstance) {
         mode,
         language,
         botName,
+        captureScreenshots,
         status: scheduledStartAt ? "scheduled" : "pending",
         scheduledStartAt,
       })
@@ -207,6 +209,7 @@ export async function botRoutes(app: FastifyInstance) {
         platform,
         mode,
         botName,
+        captureScreenshots,
       });
       await db
         .update(schema.meetings)

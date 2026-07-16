@@ -125,6 +125,7 @@ export const meetings = pgTable("meetings", {
   mode: text("mode").notNull().default("post_meeting"),
   language: text("language").notNull().default("id"),
   botName: text("bot_name").notNull(),
+  captureScreenshots: boolean("capture_screenshots").notNull().default(true),
   status: text("status").notNull().default("pending"),
   scheduledStartAt: timestamp("scheduled_start_at"),
   containerId: text("container_id"),

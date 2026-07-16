@@ -9,6 +9,7 @@ import {
   Loader2,
   Plus,
   Search,
+  Images,
   X,
 } from "lucide-react";
 import { TRANSCRIPTION_LANGUAGES } from "@openminutes/shared";
@@ -427,6 +428,7 @@ export function NewBotDialog() {
   const [botName, setBotName] = useState("OpenMinutes Assistant");
   const [mode, setMode] = useState<TranscriptionMode>("post_meeting");
   const [language, setLanguage] = useState<TranscriptionLanguage>("id");
+  const [captureScreenshots, setCaptureScreenshots] = useState(true);
   const [joinTiming, setJoinTiming] = useState<"now" | "scheduled">("now");
   const [scheduledAt, setScheduledAt] = useState(defaultScheduledDate);
   const [scheduleError, setScheduleError] = useState<string | null>(null);
@@ -440,6 +442,7 @@ export function NewBotDialog() {
       setMeetingUrl("");
       setTitle("");
       setLanguage("id");
+      setCaptureScreenshots(true);
       setJoinTiming("now");
       setScheduledAt(defaultScheduledDate());
       setScheduleError(null);
@@ -470,6 +473,7 @@ export function NewBotDialog() {
       mode,
       language,
       botName,
+      captureScreenshots,
       ...(scheduledStartAt
         ? { scheduledStartAt: scheduledStartAt.toISOString() }
         : {}),
@@ -602,6 +606,33 @@ export function NewBotDialog() {
               >
                 <LanguageCombobox value={language} onChange={setLanguage} />
               </Field>
+
+              <label
+                htmlFor="capture-screenshots"
+                className={cn(
+                  "flex cursor-pointer items-start gap-3 rounded-lg border p-3 text-sm transition-colors duration-200",
+                  captureScreenshots
+                    ? "border-accent bg-accent/10"
+                    : "border-border hover:bg-surface-hover",
+                )}
+              >
+                <input
+                  id="capture-screenshots"
+                  type="checkbox"
+                  checked={captureScreenshots}
+                  onChange={(event) => setCaptureScreenshots(event.target.checked)}
+                  className="mt-1 h-4 w-4 rounded border-border text-accent focus:ring-accent"
+                />
+                <span>
+                  <span className="flex items-center gap-2 font-bold text-foreground">
+                    <Images className="h-4 w-4 text-muted-foreground" aria-hidden />
+                    Capture screenshots
+                  </span>
+                  <span className="mt-1 block text-xs leading-5 text-muted-foreground">
+                    Save visual snapshots when shared content changes during the meeting.
+                  </span>
+                </span>
+              </label>
 
               <fieldset>
                 <legend className="mb-1.5 text-sm font-semibold">

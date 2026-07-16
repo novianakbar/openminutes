@@ -117,6 +117,7 @@ export const api = {
     mode: TranscriptionMode;
     language: TranscriptionLanguage;
     botName?: string;
+    captureScreenshots?: boolean;
     scheduledStartAt?: string;
   }) =>
     request<{

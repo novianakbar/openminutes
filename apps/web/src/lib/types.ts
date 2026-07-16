@@ -29,6 +29,7 @@ export interface Meeting {
   mode: TranscriptionMode;
   language: string;
   botName: string;
+  captureScreenshots: boolean;
   status: BotStatus;
   scheduledStartAt: string | null;
   containerId: string | null;

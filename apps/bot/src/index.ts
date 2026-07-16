@@ -45,12 +45,21 @@ function positiveNumberEnv(key: string, fallback: number): number {
   return Number.isFinite(value) && value > 0 ? value : fallback;
 }
 
+function booleanEnv(key: string, fallback: boolean): boolean {
+  const value = process.env[key]?.trim().toLowerCase();
+  if (!value) return fallback;
+  if (["1", "true", "yes", "on"].includes(value)) return true;
+  if (["0", "false", "no", "off"].includes(value)) return false;
+  return fallback;
+}
+
 const cfg = {
   meetingId: required("MEETING_ID"),
   meetingUrl: required("MEETING_URL"),
   platform: required("PLATFORM"),
   mode: process.env.MODE ?? "post_meeting",
   botName: process.env.BOT_NAME ?? "OpenMinutes Assistant",
+  captureScreenshots: booleanEnv("CAPTURE_SCREENSHOTS", true),
   joinTimeoutMs: positiveNumberEnv("JOIN_TIMEOUT_SEC", 300) * 1000,
   maxDurationMs: positiveNumberEnv("MAX_DURATION_MIN", 180) * 60_000,
   screenshotIntervalMs: positiveNumberEnv("SCREENSHOT_INTERVAL_SEC", 10) * 1000,
@@ -187,15 +196,25 @@ async function blockExternalAppProtocols(profileDir: string): Promise<void> {
 }
 
 async function main() {
-  const platform = PLATFORMS[cfg.platform] ?? googleMeet;
+  const platform = PLATFORMS[cfg.platform];
+  if (!platform) {
+    throw new Error(
+      `Unsupported bot platform "${cfg.platform}". Supported platforms: ${Object.keys(
+        PLATFORMS,
+      ).join(", ")}.`,
+    );
+  }
+  console.log(
+    `Starting bot for platform=${cfg.platform} browser=chromium url=${cfg.meetingUrl}`,
+  );
   const useStealth = shouldUseStealth(cfg.platform);
-  const chromium = useStealth ? stealthChromium : vanillaChromium;
+  const browser = useStealth ? stealthChromium : vanillaChromium;
   const useChromiumFakeMedia = shouldUseChromiumFakeMedia(cfg.platform);
 
   await reportStatus(cfg.meetingId, "joining");
   await blockExternalAppProtocols(PROFILE_DIR);
 
-  const context = await chromium.launchPersistentContext(PROFILE_DIR, {
+  const context = await browser.launchPersistentContext(PROFILE_DIR, {
     headless: false,
     viewport: { width: 1280, height: 720 },
     screen: { width: 1280, height: 720 },
@@ -262,26 +281,28 @@ async function main() {
 
   await reportStatus(cfg.meetingId, "recording");
   const recorder = startRecording(RECORDING_PATH);
-  const screenshots = startScreenshotCapture(page, {
-    startedAt: recorder.startedAt,
-    intervalMs: cfg.screenshotIntervalMs,
-    maxScreenshots: cfg.screenshotMaxCount,
-    minHashDistance: cfg.screenshotMinHashDistance,
-    onCapture: async (capture, index) => {
-      const objectKey = await uploadScreenshot(
-        cfg.meetingId,
-        index,
-        capture.buffer,
-      );
-      await reportScreenshot(cfg.meetingId, {
-        objectKey,
-        capturedAtMs: capture.capturedAtMs,
-        width: capture.width,
-        height: capture.height,
-        hash: capture.hash,
-      });
-    },
-  });
+  const screenshots = cfg.captureScreenshots
+    ? startScreenshotCapture(page, {
+        startedAt: recorder.startedAt,
+        intervalMs: cfg.screenshotIntervalMs,
+        maxScreenshots: cfg.screenshotMaxCount,
+        minHashDistance: cfg.screenshotMinHashDistance,
+        onCapture: async (capture, index) => {
+          const objectKey = await uploadScreenshot(
+            cfg.meetingId,
+            index,
+            capture.buffer,
+          );
+          await reportScreenshot(cfg.meetingId, {
+            objectKey,
+            capturedAtMs: capture.capturedAtMs,
+            width: capture.width,
+            height: capture.height,
+            hash: capture.hash,
+          });
+        },
+      })
+    : null;
   const liveTranscription =
     cfg.mode === "realtime"
       ? startLiveTranscriptionStream(cfg.meetingId)
@@ -301,10 +322,10 @@ async function main() {
 async function finish(
   recorder: Recorder,
   liveTranscription: LiveTranscriptionStream | null,
-  screenshots: ScreenshotCapture,
+  screenshots: ScreenshotCapture | null,
 ) {
   const durationSec = Math.round((Date.now() - recorder.startedAt) / 1000);
-  await screenshots.stop().catch((err) => {
+  await screenshots?.stop().catch((err) => {
     console.error("screenshot capture finalize gagal:", err);
   });
   await liveTranscription?.stop().catch((err) => {
