@@ -1,35 +1,56 @@
 # OpenMinutes
 
-Sistem bot meeting: kirim link Google Meet / Microsoft Teams, sistem men-spawn
-kontainer Docker berisi bot (Chromium + Playwright) yang join sebagai peserta,
-merekam audio meeting, lalu mentranskripsinya.
+OpenMinutes is a self-hosted meeting bot for recording and transcribing online
+meetings. Give it a Google Meet or Microsoft Teams link, and it will start a
+browser-based bot, join the meeting, record the audio, upload the recording, and
+process the transcript.
 
-Multi-user: admin membuat akun, tiap user login dan hanya melihat meeting
-miliknya sendiri.
+The app is built for multi-user teams: admins create accounts, users only see
+their own meetings, and API keys are available for automation.
 
-## Arsitektur
+## Features
 
-```
+- Meeting bot for Google Meet and Microsoft Teams.
+- Audio recording with containerized Chromium, Playwright, PulseAudio, and FFmpeg.
+- Post-meeting and real-time transcription flows.
+- Pluggable transcription providers:
+  - Deepgram, including diarization support.
+  - OpenAI-compatible transcription endpoints.
+- Web dashboard for meetings, transcripts, users, and transcription settings.
+- Multi-user auth with admin-managed users and per-user API keys.
+- Live bot view through noVNC for debugging or manual takeover.
+- Production Docker stack with Postgres, Redis, MinIO, API, worker, web, and bot image.
+
+## Architecture
+
+```text
 apps/web (Vite + React) ──┐
-klien lain (curl/dsb) ────┴─HTTP──▶ apps/api (Fastify + better-auth)
-                  ├─ spawn kontainer via Docker API ──▶ apps/bot (Playwright + PulseAudio + FFmpeg)
-                  │                                        ├─ join meeting, rekam audio
-                  │                                        ├─ upload rekaman ke MinIO
-                  │                                        └─ callback status ke /internal/*
-                  └─ enqueue job (BullMQ/Redis) ──▶ apps/worker ── STT provider ──▶ PostgreSQL
+API clients ──────────────┴─HTTP──▶ apps/api (Fastify + better-auth)
+                    ├─ Docker API ──▶ apps/bot (Playwright + PulseAudio + FFmpeg)
+                    │                    ├─ joins meeting
+                    │                    ├─ records audio
+                    │                    ├─ uploads recording to MinIO
+                    │                    └─ calls back to /internal/*
+                    └─ BullMQ/Redis ──▶ apps/worker ── STT provider ──▶ PostgreSQL
 ```
 
-| Paket | Peran |
+| Package | Purpose |
 |---|---|
-| `apps/web` | Dashboard web (Vite + React + Tailwind) — login, meeting, transkrip, halaman admin |
-| `apps/api` | REST API, auth session + API key (better-auth), bot manager (dockerode) |
-| `apps/bot` | Bot meeting — dibangun jadi image `openminutes-bot:dev`, satu kontainer per meeting |
-| `apps/worker` | Konsumer antrian transkripsi — provider pluggable (Deepgram / OpenAI-compatible) |
-| `packages/shared` | Schema Drizzle + tipe bersama |
+| `apps/web` | Dashboard UI for login, meetings, transcripts, admin users, and transcription settings |
+| `apps/api` | REST API, auth/session/API key handling, Docker bot manager, and live-view proxy |
+| `apps/bot` | Meeting bot image, one ephemeral container per meeting |
+| `apps/worker` | Transcription queue worker |
+| `packages/shared` | Shared schema, types, and transcript helpers |
 
-## Menjalankan (production Docker)
+## Production Quickstart
 
-Alur production full Docker:
+Requirements:
+
+- Ubuntu/Debian, Fedora, or macOS.
+- Docker with Docker Compose.
+- `make`.
+
+For a new server or laptop:
 
 ```bash
 make setup
@@ -37,146 +58,176 @@ make build
 make up
 ```
 
-`make setup` mengecek/menginstall dependency host untuk Ubuntu/Debian, Fedora,
-atau macOS: `git`, `make`, `curl`, `openssl`, Docker + Compose plugin,
-Node/Corepack/pnpm. Jika `.env` belum ada, script membuat `.env` production
-dengan secret/password acak dan default yang cocok untuk jaringan Docker.
-File `.env` yang sudah ada tidak akan ditimpa.
+`make setup` installs/checks host dependencies and creates a production `.env`
+with generated secrets when `.env` does not exist. It will not overwrite an
+existing `.env`.
 
-Setelah `make up`, dashboard tersedia di:
+Open the dashboard:
 
 ```text
 http://localhost:8080
 ```
 
-Target Make yang tersedia:
-
-```bash
-make setup      # siapkan host + buat .env production bila belum ada
-make build      # build image api, worker, web, dan bot
-make up         # start infra, push schema, seed admin, start app
-make down       # stop stack
-make logs       # tail logs semua service
-make ps         # lihat status service
-make restart    # restart api/worker/web
-make db-push    # push schema database
-make seed       # seed admin idempotent
-make clean      # stop stack dan hapus volume
-```
-
-Default admin seed:
+Default seeded admin:
 
 ```text
 admin@openminutes.dev / admin12345
 ```
 
-Bisa dioverride saat seed/up:
+Override the seeded admin when starting or reseeding:
 
 ```bash
-make seed ADMIN_EMAIL=admin@example.com ADMIN_PASSWORD='password-ku'
-make up ADMIN_EMAIL=admin@example.com ADMIN_PASSWORD='password-ku'
+make up ADMIN_EMAIL=admin@example.com ADMIN_PASSWORD='change-this-password'
+make seed ADMIN_EMAIL=admin@example.com ADMIN_PASSWORD='change-this-password'
 ```
 
-Env production penting:
+If you previously started OpenMinutes with different database credentials, the
+old Postgres volume may not match the new `.env`. For a fresh local install,
+reset volumes with:
 
-- `ENV_FILE` — path env file yang dipakai service `api` dan `worker`;
-  default `.env`. Biasanya tidak perlu diubah.
-- `APP_PORT` — port HTTP host untuk web, default `8080`.
+```bash
+make clean
+make up
+```
+
+## Make Targets
+
+```bash
+make setup      # install/check host dependencies and create .env if missing
+make build      # build api, worker, web, and bot images
+make up         # start infra, push schema, seed admin, then start app services
+make down       # stop the stack
+make logs       # follow service logs
+make ps         # show service status
+make restart    # restart api, worker, and web
+make db-push    # push database schema
+make seed       # seed admin user idempotently
+make clean      # stop stack and remove volumes
+```
+
+## Configuration
+
+Production settings live in `.env`. Use `.env.production.example` as the shape of
+the expected config.
+
+Important values:
+
+- `APP_PORT` — host HTTP port for the web app, default `8080`.
+- `BETTER_AUTH_URL` — public URL used by auth, for example `https://example.com`.
+- `WEB_ORIGIN` — allowed web origin, usually the same public URL.
 - `POSTGRES_PORT`, `REDIS_PORT`, `MINIO_HOST_PORT`, `MINIO_CONSOLE_PORT` —
-  port infra yang dibind ke `127.0.0.1` untuk operasional/debug lokal.
-- `BETTER_AUTH_URL` dan `WEB_ORIGIN` — isi dengan URL publik deployment
-  bila dijalankan di balik reverse proxy/domain.
-- `BOT_IMAGE=openminutes-bot:prod`, `BOT_NETWORK=openminutes-net`,
-  `BOT_VNC_MODE=network` — membuat API dan bot dinamis berada di network Docker
-  yang sama sehingga live view tidak perlu publish port bot.
-- `DEEPGRAM_API_KEY` opsional sebagai fallback; konfigurasi utama provider
-  transkripsi tetap bisa diatur dari UI admin.
+  local loopback ports for operations/debugging.
+- `BOT_IMAGE=openminutes-bot:prod`.
+- `BOT_NETWORK=openminutes-net`.
+- `BOT_VNC_MODE=network`.
+- `API_URL_FOR_BOTS=http://api:3000`.
+- `MINIO_ENDPOINT_FOR_BOTS=minio`.
+- `DEEPGRAM_API_KEY` — optional fallback transcription key. The preferred
+  provider configuration can be managed from the admin UI.
 
-Production awal diekspos sebagai HTTP lokal/configurable. Untuk HTTPS/domain,
-taruh reverse proxy eksternal (mis. Nginx, Caddy, Cloudflare Tunnel) di depan
-port `APP_PORT`.
+The production stack exposes HTTP only. Put Nginx, Caddy, Cloudflare Tunnel, or
+another reverse proxy in front of `APP_PORT` for TLS and domains.
 
-## Menjalankan (dev lokal)
+## Development
+
+Install dependencies:
 
 ```bash
 pnpm install
-pnpm infra:up          # Postgres, Redis, MinIO (+ bucket "recordings")
-pnpm db:push           # terapkan schema
-pnpm db:seed           # buat admin (default: admin@openminutes.dev / admin12345)
-pnpm bot:build         # build image bot (sekali, atau tiap kali kode bot berubah)
-pnpm dev:api           # terminal 1
-pnpm dev:worker        # terminal 2
-pnpm dev:web           # terminal 3 — dashboard di http://localhost:5173
 ```
 
-Login di dashboard dengan kredensial hasil `db:seed` (bisa dioverride:
-`pnpm db:seed -- email password`). Dev server web mem-proxy `/api` ke
-`http://localhost:3000`.
+Start local infrastructure:
 
-## Auth & multi-user
+```bash
+pnpm infra:up
+pnpm db:push
+pnpm db:seed
+pnpm bot:build
+```
 
-- **Web**: login email + password (session cookie). Registrasi publik dimatikan —
-  akun dibuat admin lewat halaman **Users**.
-- **Admin**: role `admin` membuka halaman Users (create/ban/role/hapus user) dan
-  Transcription (konfigurasi provider STT).
-- **Programmatic**: tiap user bisa membuat API key di halaman **Settings**,
-  dipakai sebagai header `x-api-key` — endpoint yang sama menerima session
-  cookie maupun API key.
-- Isolasi resource: semua endpoint meeting difilter berdasarkan user pemilik.
+Start app processes in separate terminals:
+
+```bash
+pnpm dev:api
+pnpm dev:worker
+pnpm dev:web
+```
+
+The development dashboard runs at:
+
+```text
+http://localhost:5173
+```
+
+The Vite dev server proxies `/api` to `http://localhost:3000`.
 
 ## Transcription
 
-Provider diatur admin dari halaman **Transcription** (tersimpan di DB, berlaku
-untuk job berikutnya tanpa restart worker). Bahasa transkripsi dipilih user saat
-join meeting dan disimpan per meeting:
+Transcription provider settings are managed from the admin dashboard and stored
+in the database. Changes apply to future jobs without restarting the worker.
 
-- **Deepgram** — dengan speaker diarization.
-- **OpenAI-compatible** — `POST {baseUrl}/audio/transcriptions`
-  (`verbose_json`); dipakai untuk OpenAI, Groq, atau whisper self-hosted
-  (mis. speaches / faster-whisper-server). Tanpa diarization.
+Supported providers:
 
-Mode **Real-time** mengirim audio bot ke API saat meeting berjalan. Deepgram
-memakai streaming WebSocket dengan partial transcript; OpenAI-compatible memakai
-micro-batch ke endpoint transkripsi yang sama agar tetap kompatibel dengan
-OpenAI/Groq/server Whisper lokal. Jika realtime gagal, rekaman tetap diupload dan
-diproses lewat alur after-meeting.
+- **Deepgram** — supports speaker diarization.
+- **OpenAI-compatible** — sends `POST {baseUrl}/audio/transcriptions` using
+  `verbose_json`; works with OpenAI, Groq, and compatible Whisper servers.
 
-Tanpa konfigurasi, rekaman tetap tersimpan tapi transkripsi dilewati
-(status `transcription_skipped`). Env `DEEPGRAM_API_KEY` jadi fallback bila
-settings belum diisi.
+If no provider is configured, recordings are still stored but transcription is
+skipped with status `transcription_skipped`.
 
-## Pemakaian via API
+## API Usage
+
+Create an API key from the dashboard Settings page, then call the API with
+`x-api-key`.
+
+Create a bot:
 
 ```bash
-# Buat API key dulu di dashboard (Settings), lalu:
-
-# Suruh bot join meeting
-curl -X POST http://localhost:3000/api/bots \
-  -H "x-api-key: <API_KEY>" -H "content-type: application/json" \
+curl -X POST http://localhost:8080/api/bots \
+  -H "x-api-key: <API_KEY>" \
+  -H "content-type: application/json" \
   -d '{"meetingUrl": "https://meet.google.com/xxx-yyyy-zzz", "botName": "OpenMinutes Bot"}'
-
-# Cek status + transkrip
-curl http://localhost:3000/api/meetings/<meetingId> -H "x-api-key: <API_KEY>"
-
-# Suruh bot keluar dari meeting
-curl -X DELETE http://localhost:3000/api/bots/<meetingId> -H "x-api-key: <API_KEY>"
 ```
 
-Alur status meeting: `pending → joining → waiting_admission → recording →
-uploading → processing_transcript → completed` (atau `failed` /
-`transcription_skipped`).
+Fetch meeting status and transcript:
 
-Catatan penting:
-- Bot Google Meet biasanya harus di-approve host dari waiting room ("ask to join").
-- Dukungan Teams eksperimental — hanya bekerja jika tenant mengizinkan anonymous join.
-- Selector UI Meet/Teams bisa berubah sewaktu-waktu; kalau bot gagal join, cek
-  `docker logs` kontainer `openminutes-bot-<meetingId>`.
+```bash
+curl http://localhost:8080/api/meetings/<meetingId> \
+  -H "x-api-key: <API_KEY>"
+```
 
-## Belum dikerjakan (roadmap)
+Stop a bot:
 
-- Login Google/GitHub (tinggal aktifkan `socialProviders` di
-  `apps/api/src/auth.ts` + tombol di halaman login).
-- Speaker mapping dari DOM meeting (siapa berbicara).
-- Migrasi bot manager ke Kubernetes Jobs (interface sudah dipisah di
-  `apps/api/src/services/botManager.ts`).
-# openminutes
+```bash
+curl -X DELETE http://localhost:8080/api/bots/<meetingId> \
+  -H "x-api-key: <API_KEY>"
+```
+
+Common meeting statuses:
+
+```text
+pending -> joining -> waiting_admission -> recording -> uploading
+-> processing_transcript -> completed
+```
+
+Failure or non-transcription states include `failed` and
+`transcription_skipped`.
+
+## Operational Notes
+
+- Google Meet bots usually need host approval from the waiting room.
+- Microsoft Teams support depends on the tenant allowing anonymous guests.
+- Meeting UI selectors can change. If a bot cannot join, inspect the bot logs:
+
+```bash
+docker logs openminutes-bot-<meetingId>
+```
+
+- Production bot containers are spawned dynamically by the API through the
+  Docker socket. The API container therefore mounts `/var/run/docker.sock`.
+
+## Contributing
+
+Issues and pull requests are welcome. For changes that touch bot behavior,
+deployment, auth, or transcription flow, please include a short test note in the
+PR describing what was verified.
