@@ -75,10 +75,30 @@ export interface Summary {
   sourceType: "meeting" | "audio_summary";
   sourceId: string;
   templateKey: string;
+  version: number;
   status: SummaryStatus;
   content: string | null;
   model: string | null;
   error: string | null;
+  triggeredByUserId: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface SummaryGroup {
+  templateKey: string;
+  latest: Summary;
+  history: Summary[];
+}
+
+export interface SummaryTemplate {
+  key: string;
+  name: string;
+  description: string;
+  systemPrompt: string;
+  userPrompt: string;
+  enabled: boolean;
+  sortOrder: number;
   createdAt: string;
   updatedAt: string;
 }
@@ -104,6 +124,7 @@ export interface AudioSummary {
 export interface AudioSummaryDetail extends AudioSummary {
   transcript: AudioSummaryTranscriptSegment[];
   summary: Summary | null;
+  summaries: SummaryGroup[];
 }
 
 export interface MeetingScreenshot {
@@ -134,6 +155,8 @@ export interface MeetingDetail extends Meeting {
   transcript: TranscriptSegment[];
   events: MeetingStatusEvent[];
   screenshots: MeetingScreenshot[];
+  summary: Summary | null;
+  summaries: SummaryGroup[];
 }
 
 export interface MeetingListResponse {

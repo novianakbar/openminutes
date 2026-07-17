@@ -3,6 +3,7 @@ import type {
   AudioSummaryListResponse,
   MeetingDetail,
   MeetingListResponse,
+  SummaryTemplate,
   TranscriptionLanguage,
   TranscriptionMode,
 } from "./types";
@@ -105,10 +106,10 @@ export const api = {
       `/audio-summaries/${id}/transcribe`,
       { method: "POST" },
     ),
-  summarizeAudioSummary: (id: string) =>
+  summarizeAudioSummary: (id: string, templateKey = "default") =>
     request<{ audioSummaryId: string; status: string }>(
       `/audio-summaries/${id}/summarize`,
-      { method: "POST" },
+      { method: "POST", body: JSON.stringify({ templateKey }) },
     ),
   getMeeting: (id: string) => request<MeetingDetail>(`/meetings/${id}`),
   createBot: (input: {
@@ -151,6 +152,11 @@ export const api = {
       `/meetings/${id}/transcribe`,
       { method: "POST" },
     ),
+  summarizeMeeting: (id: string, templateKey = "default") =>
+    request<{ meetingId: string; status: string }>(
+      `/meetings/${id}/summarize`,
+      { method: "POST", body: JSON.stringify({ templateKey }) },
+    ),
   mintViewToken: (id: string) =>
     request<{ token: string; expiresInSec: number }>(
       `/meetings/${id}/view-token`,
@@ -169,6 +175,27 @@ export const api = {
     request<SummarySettings>("/admin/summary-settings", {
       method: "PUT",
       body: JSON.stringify(settings),
+    }),
+  listSummaryTemplates: () =>
+    request<SummaryTemplate[]>("/summary-templates"),
+  listAdminSummaryTemplates: () =>
+    request<SummaryTemplate[]>("/admin/summary-templates"),
+  createSummaryTemplate: (template: Omit<SummaryTemplate, "createdAt" | "updatedAt">) =>
+    request<SummaryTemplate>("/admin/summary-templates", {
+      method: "POST",
+      body: JSON.stringify(template),
+    }),
+  updateSummaryTemplate: (
+    key: string,
+    template: Partial<Omit<SummaryTemplate, "key" | "createdAt" | "updatedAt">>,
+  ) =>
+    request<SummaryTemplate>(`/admin/summary-templates/${key}`, {
+      method: "PATCH",
+      body: JSON.stringify(template),
+    }),
+  deleteSummaryTemplate: (key: string) =>
+    request<{ key: string; deleted: true }>(`/admin/summary-templates/${key}`, {
+      method: "DELETE",
     }),
   fetchAudioBlob: async (id: string): Promise<Blob> => {
     const res = await fetch(`/api/meetings/${id}/audio`);

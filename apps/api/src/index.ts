@@ -8,6 +8,7 @@ import { adminRoutes } from "./routes/admin";
 import { audioSummaryRoutes } from "./routes/audioSummaries";
 import { botRoutes } from "./routes/bots";
 import { internalRoutes } from "./routes/internal";
+import { summaryTemplateRoutes } from "./routes/summaryTemplates";
 import { vncProxyRoutes } from "./services/vncProxy";
 import { startScheduledBotService } from "./services/scheduledBots";
 
@@ -39,6 +40,7 @@ app.route({
 
 app.register(botRoutes, { prefix: "/api" });
 app.register(audioSummaryRoutes, { prefix: "/api" });
+app.register(summaryTemplateRoutes, { prefix: "/api" });
 app.register(vncProxyRoutes, { prefix: "/api" });
 app.register(adminRoutes, { prefix: "/api/admin" });
 app.register(internalRoutes, { prefix: "/internal" });

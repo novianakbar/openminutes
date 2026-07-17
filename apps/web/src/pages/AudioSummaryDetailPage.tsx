@@ -22,7 +22,7 @@ import { Card, CardHeader, CardTitle } from "../components/ui/Card";
 import { ConfirmDialog } from "../components/ui/ConfirmDialog";
 import { formatDateTime, formatFileSize, formatTimestamp } from "../lib/format";
 import { cn } from "../lib/cn";
-import type { Summary } from "../lib/types";
+import type { Summary, SummaryGroup } from "../lib/types";
 
 function languageLabel(code: string): string {
   return (
@@ -58,11 +58,17 @@ function SummaryStatusBadge({ summary }: { summary?: Summary | null }) {
   );
 }
 
+function hasProcessingSummary(groups?: SummaryGroup[]): boolean {
+  return groups?.some((group) => group.latest.status === "processing") ?? false;
+}
+
 export function AudioSummaryDetailPage() {
   const { id } = useParams<{ id: string }>();
   const queryClient = useQueryClient();
   const navigate = useNavigate();
   const [activeTab, setActiveTab] = useState<"summary" | "transcript">("summary");
+  const [selectedTemplateKey, setSelectedTemplateKey] = useState("default");
+  const [selectedSummaryId, setSelectedSummaryId] = useState<string | null>(null);
   const [deleteOpen, setDeleteOpen] = useState(false);
 
   const { data, isPending, isError, error } = useQuery({
@@ -72,10 +78,17 @@ export function AudioSummaryDetailPage() {
     refetchInterval: (query) => {
       const item = query.state.data;
       if (!item) return false;
-      return isInProgress(item.status) || item.summary?.status === "processing"
+      return isInProgress(item.status) ||
+        item.summary?.status === "processing" ||
+        hasProcessingSummary(item.summaries)
         ? 5000
         : false;
     },
+  });
+
+  const { data: summaryTemplates } = useQuery({
+    queryKey: ["summary-templates"],
+    queryFn: api.listSummaryTemplates,
   });
 
   const hasAudio = Boolean(data?.audioObjectKey);
@@ -106,8 +119,9 @@ export function AudioSummaryDetailPage() {
   });
 
   const summarizeMutation = useMutation({
-    mutationFn: () => api.summarizeAudioSummary(id!),
+    mutationFn: () => api.summarizeAudioSummary(id!, selectedTemplateKey),
     onSuccess: () => {
+      setSelectedSummaryId(null);
       queryClient.invalidateQueries({ queryKey: ["audio-summaries", id] });
       queryClient.invalidateQueries({ queryKey: ["audio-summaries"] });
     },
@@ -150,8 +164,40 @@ export function AudioSummaryDetailPage() {
   const canRetranscribe = ["completed", "failed", "transcription_skipped"].includes(
     data.status,
   );
+  const summaryGroups = data.summaries ?? [];
+  const selectedGroup =
+    summaryGroups.find((group) => group.templateKey === selectedTemplateKey) ?? null;
+  const selectedSummary =
+    (selectedSummaryId
+      ? selectedGroup?.history.find((summary) => summary.id === selectedSummaryId)
+      : null) ??
+    selectedGroup?.latest ??
+    null;
+  const selectedTemplateEnabled = Boolean(
+    summaryTemplates?.some((template) => template.key === selectedTemplateKey),
+  );
+  const templateOptions = [
+    ...(summaryTemplates ?? []).map((template) => ({
+      key: template.key,
+      name: template.name,
+      enabled: true,
+    })),
+    ...summaryGroups
+      .filter(
+        (group) =>
+          !(summaryTemplates ?? []).some((template) => template.key === group.templateKey),
+      )
+      .map((group) => ({
+        key: group.templateKey,
+        name: `${group.templateKey} (disabled)`,
+        enabled: false,
+      })),
+  ];
   const canSummarize =
-    hasTranscript && data.summary?.status !== "processing" && !isInProgress(data.status);
+    hasTranscript &&
+    selectedTemplateEnabled &&
+    selectedGroup?.latest.status !== "processing" &&
+    !isInProgress(data.status);
 
   function handleRetranscribe() {
     if (
@@ -181,7 +227,7 @@ export function AudioSummaryDetailPage() {
                 {data.title}
               </h1>
               <StatusBadge status={data.status} />
-              <SummaryStatusBadge summary={data.summary} />
+              <SummaryStatusBadge summary={selectedSummary ?? data.summary} />
             </div>
             <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-2 text-sm text-muted-foreground">
               <span className="inline-flex items-center gap-1.5">
@@ -218,6 +264,8 @@ export function AudioSummaryDetailPage() {
               title={
                 !hasTranscript
                   ? "Transcript is required before summary"
+                  : !selectedTemplateEnabled
+                    ? "This template is disabled"
                   : undefined
               }
             >
@@ -226,7 +274,7 @@ export function AudioSummaryDetailPage() {
               ) : (
                 <Sparkles className="h-4 w-4" aria-hidden />
               )}
-              {data.summary?.status === "completed" ? "Regenerate summary" : "Generate summary"}
+              {selectedGroup?.latest.status === "completed" ? "Regenerate summary" : "Generate summary"}
             </Button>
             <Button
               type="button"
@@ -264,7 +312,7 @@ export function AudioSummaryDetailPage() {
               Summary model
             </p>
             <p className="mt-2 truncate text-sm font-bold">
-              {data.summary?.model ?? "Not generated"}
+              {selectedSummary?.model ?? "Not generated"}
             </p>
           </div>
         </div>
@@ -276,9 +324,9 @@ export function AudioSummaryDetailPage() {
             {data.error}
           </Alert>
         )}
-        {data.summary?.error && data.summary.status === "failed" && (
+        {selectedSummary?.error && selectedSummary.status === "failed" && (
           <Alert tone="danger" role="alert" title="Summary error">
-            {data.summary.error}
+            {selectedSummary.error}
           </Alert>
         )}
         {retranscribeMutation.isError && (
@@ -335,15 +383,68 @@ export function AudioSummaryDetailPage() {
 
             {activeTab === "summary" ? (
               <div className="min-h-[440px] p-5">
-                {data.summary?.status === "completed" && data.summary.content ? (
+                <div className="mb-4 flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
+                  <div className="grid gap-3 sm:grid-cols-[minmax(220px,1fr)_180px]">
+                    <label className="text-sm font-semibold">
+                      Template
+                      <select
+                        value={selectedTemplateKey}
+                        onChange={(event) => {
+                          setSelectedTemplateKey(event.target.value);
+                          setSelectedSummaryId(null);
+                        }}
+                        className="mt-1 h-10 w-full rounded-lg border border-border bg-background px-3 text-sm text-foreground focus-visible:outline-2 focus-visible:outline-accent"
+                      >
+                        {templateOptions.map((template) => (
+                          <option key={template.key} value={template.key}>
+                            {template.name}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                    <label className="text-sm font-semibold">
+                      Version
+                      <select
+                        value={selectedSummary?.id ?? ""}
+                        onChange={(event) => setSelectedSummaryId(event.target.value)}
+                        disabled={!selectedGroup}
+                        className="mt-1 h-10 w-full rounded-lg border border-border bg-background px-3 text-sm text-foreground disabled:opacity-60 focus-visible:outline-2 focus-visible:outline-accent"
+                      >
+                        {!selectedGroup && <option value="">No versions</option>}
+                        {selectedGroup?.history.map((summary) => (
+                          <option key={summary.id} value={summary.id}>
+                            v{summary.version} · {formatDateTime(summary.createdAt)}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                  </div>
+                  <Button
+                    type="button"
+                    onClick={() => summarizeMutation.mutate()}
+                    disabled={!canSummarize || summarizeMutation.isPending}
+                    aria-busy={summarizeMutation.isPending}
+                  >
+                    {summarizeMutation.isPending ? (
+                      <Loader2 className="h-4 w-4 animate-spin" aria-hidden />
+                    ) : (
+                      <Sparkles className="h-4 w-4" aria-hidden />
+                    )}
+                    {selectedGroup?.latest.status === "completed"
+                      ? "Regenerate summary"
+                      : "Generate summary"}
+                  </Button>
+                </div>
+
+                {selectedSummary?.status === "completed" && selectedSummary.content ? (
                   <article className="prose prose-sm max-w-none whitespace-pre-wrap rounded-lg bg-background p-4 text-sm leading-7 text-foreground">
-                    {data.summary.content}
+                    {selectedSummary.content}
                   </article>
                 ) : (
                   <EmptyState
                     icon={Sparkles}
                     title={
-                      data.summary?.status === "processing"
+                      selectedSummary?.status === "processing"
                         ? "Summary is being generated"
                         : "Summary is not available yet"
                     }
@@ -359,8 +460,14 @@ export function AudioSummaryDetailPage() {
                           onClick={() => summarizeMutation.mutate()}
                           disabled={summarizeMutation.isPending}
                         >
-                          <Sparkles className="h-4 w-4" aria-hidden />
-                          Generate summary
+                          {summarizeMutation.isPending ? (
+                            <Loader2 className="h-4 w-4 animate-spin" aria-hidden />
+                          ) : (
+                            <Sparkles className="h-4 w-4" aria-hidden />
+                          )}
+                          {selectedGroup?.latest.status === "completed"
+                            ? "Regenerate summary"
+                            : "Generate summary"}
                         </Button>
                       ) : undefined
                     }

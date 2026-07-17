@@ -13,6 +13,7 @@ import {
   MonitorPlay,
   RefreshCw,
   ScrollText,
+  Sparkles,
   Square,
   Trash2,
   XCircle,
@@ -28,12 +29,15 @@ import { Button, buttonClass } from "../components/ui/Button";
 import { Card, CardHeader, CardTitle } from "../components/ui/Card";
 import { ConfirmDialog } from "../components/ui/ConfirmDialog";
 import { AudioPlayer } from "../components/ui/AudioPlayer";
+import { cn } from "../lib/cn";
 import type {
   LivePartialTranscriptSegment,
   LiveTranscriptEvent,
   MeetingStatusEvent,
   MeetingScreenshot,
   RealtimeTranscriptStatus,
+  Summary,
+  SummaryGroup,
   TranscriptSegment,
 } from "../lib/types";
 
@@ -78,6 +82,49 @@ function mergeTranscriptSegments(
   for (const segment of first) byId.set(segment.id, segment);
   for (const segment of second) byId.set(segment.id, segment);
   return [...byId.values()].sort((a, b) => a.startMs - b.startMs || a.id - b.id);
+}
+
+function SummaryStatusBadge({ summary }: { summary?: Summary | null }) {
+  const config = !summary
+    ? {
+        label: "Summary not generated",
+        className: "bg-muted-foreground/10 text-muted-foreground",
+        pulse: false,
+      }
+    : summary.status === "completed"
+      ? { label: "Summary ready", className: "bg-accent/15 text-accent", pulse: false }
+      : summary.status === "processing"
+        ? { label: "Summarizing", className: "bg-info/15 text-info", pulse: true }
+        : summary.status === "failed"
+          ? {
+              label: "Summary failed",
+              className: "bg-destructive/15 text-destructive",
+              pulse: false,
+            }
+          : {
+              label: "Summary queued",
+              className: "bg-muted-foreground/10 text-muted-foreground",
+              pulse: true,
+            };
+
+  return (
+    <span
+      className={cn(
+        "inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-bold whitespace-nowrap ring-1 ring-current/10",
+        config.className,
+      )}
+    >
+      <span
+        aria-hidden
+        className={cn("h-1.5 w-1.5 rounded-full bg-current", config.pulse && "animate-pulse")}
+      />
+      {config.label}
+    </span>
+  );
+}
+
+function hasProcessingSummary(groups?: SummaryGroup[]): boolean {
+  return groups?.some((group) => group.latest.status === "processing") ?? false;
 }
 
 function ScreenshotGallery({
@@ -219,6 +266,8 @@ export function MeetingDetailPage() {
   const queryClient = useQueryClient();
   const navigate = useNavigate();
   const [activeTab, setActiveTab] = useState<"summary" | "transcript">("summary");
+  const [selectedTemplateKey, setSelectedTemplateKey] = useState("default");
+  const [selectedSummaryId, setSelectedSummaryId] = useState<string | null>(null);
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [liveSegments, setLiveSegments] = useState<TranscriptSegment[]>([]);
   const [livePartial, setLivePartial] =
@@ -255,8 +304,16 @@ export function MeetingDetailPage() {
       if (stopMutation.isSuccess && isBotActive(data.status)) return 1500;
       // Transkripsi macet — percuma polling terus, tunggu aksi user.
       if (isTranscriptStuck(data.status, data.updatedAt)) return false;
+      if (hasProcessingSummary(data.summaries) || data.summary?.status === "processing") {
+        return 5000;
+      }
       return isInProgress(data.status) ? 5000 : false;
     },
+  });
+
+  const { data: summaryTemplates } = useQuery({
+    queryKey: ["summary-templates"],
+    queryFn: api.listSummaryTemplates,
   });
 
   const retranscribeMutation = useMutation({
@@ -264,6 +321,15 @@ export function MeetingDetailPage() {
     onSuccess: () => {
       // Status berubah ke processing_transcript → refetchInterval ikut
       // mengevaluasi ulang dan polling jalan lagi.
+      queryClient.invalidateQueries({ queryKey: ["meetings"] });
+    },
+  });
+
+  const summarizeMutation = useMutation({
+    mutationFn: () => api.summarizeMeeting(id!, selectedTemplateKey),
+    onSuccess: () => {
+      setSelectedSummaryId(null);
+      queryClient.invalidateQueries({ queryKey: ["meetings", id] });
       queryClient.invalidateQueries({ queryKey: ["meetings"] });
     },
   });
@@ -386,6 +452,40 @@ export function MeetingDetailPage() {
       transcriptStuck);
   const hasStoredTranscript = displayTranscript.length > 0;
   const hasVisibleTranscript = hasStoredTranscript || Boolean(livePartial);
+  const summaryGroups = meeting.summaries ?? [];
+  const selectedGroup =
+    summaryGroups.find((group) => group.templateKey === selectedTemplateKey) ?? null;
+  const selectedSummary =
+    (selectedSummaryId
+      ? selectedGroup?.history.find((summary) => summary.id === selectedSummaryId)
+      : null) ??
+    selectedGroup?.latest ??
+    null;
+  const selectedTemplateEnabled = Boolean(
+    summaryTemplates?.some((template) => template.key === selectedTemplateKey),
+  );
+  const templateOptions = [
+    ...(summaryTemplates ?? []).map((template) => ({
+      key: template.key,
+      name: template.name,
+      enabled: true,
+    })),
+    ...summaryGroups
+      .filter(
+        (group) =>
+          !(summaryTemplates ?? []).some((template) => template.key === group.templateKey),
+      )
+      .map((group) => ({
+        key: group.templateKey,
+        name: `${group.templateKey} (disabled)`,
+        enabled: false,
+      })),
+  ];
+  const canSummarize =
+    hasStoredTranscript &&
+    selectedTemplateEnabled &&
+    selectedGroup?.latest.status !== "processing" &&
+    !isInProgress(meeting.status);
 
   const handleRetranscribe = () => {
     if (
@@ -432,6 +532,7 @@ export function MeetingDetailPage() {
                 {meeting.title}
               </h1>
               <StatusBadge status={meeting.status} />
+              <SummaryStatusBadge summary={selectedSummary ?? meeting.summary} />
             </div>
             <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-2 text-sm text-muted-foreground">
               <span className="inline-flex items-center gap-1.5">
@@ -476,6 +577,30 @@ export function MeetingDetailPage() {
                 {isStopping ? "Stopping..." : "Stop session"}
               </Button>
             )}
+            <Button
+              type="button"
+              onClick={() => summarizeMutation.mutate()}
+              disabled={!canSummarize || summarizeMutation.isPending}
+              aria-busy={summarizeMutation.isPending}
+              title={
+                !hasStoredTranscript
+                  ? "Transcript is required before summary"
+                  : !selectedTemplateEnabled
+                    ? "This template is disabled"
+                  : isInProgress(meeting.status)
+                    ? "Wait until the meeting transcript is ready"
+                    : undefined
+              }
+            >
+              {summarizeMutation.isPending ? (
+                <Loader2 className="h-4 w-4 animate-spin" aria-hidden />
+              ) : (
+                <Sparkles className="h-4 w-4" aria-hidden />
+              )}
+              {selectedGroup?.latest.status === "completed"
+                ? "Regenerate summary"
+                : "Generate summary"}
+            </Button>
             <Button
               type="button"
               variant="danger"
@@ -552,6 +677,20 @@ export function MeetingDetailPage() {
             {retranscribeMutation.error instanceof ApiError
               ? retranscribeMutation.error.message
               : "Unable to start transcription."}
+          </Alert>
+        )}
+
+        {selectedSummary?.error && selectedSummary.status === "failed" && (
+          <Alert tone="danger" role="alert" title="Summary error">
+            {selectedSummary.error}
+          </Alert>
+        )}
+
+        {summarizeMutation.isError && (
+          <Alert tone="danger" role="alert">
+            {summarizeMutation.error instanceof ApiError
+              ? summarizeMutation.error.message
+              : "Unable to start summary generation."}
           </Alert>
         )}
 
@@ -650,12 +789,98 @@ export function MeetingDetailPage() {
 
             {activeTab === "summary" ? (
               <div className="min-h-[440px] p-5">
-                <EmptyState
-                  icon={FileText}
-                  title="Summary is not available yet"
-                  description="This workspace is reserved for executive summaries, action items, decisions, and follow-ups."
-                  className="min-h-[400px] border-0 bg-background"
-                />
+                <div className="mb-4 flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
+                  <div className="grid gap-3 sm:grid-cols-[minmax(220px,1fr)_180px]">
+                    <label className="text-sm font-semibold">
+                      Template
+                      <select
+                        value={selectedTemplateKey}
+                        onChange={(event) => {
+                          setSelectedTemplateKey(event.target.value);
+                          setSelectedSummaryId(null);
+                        }}
+                        className="mt-1 h-10 w-full rounded-lg border border-border bg-background px-3 text-sm text-foreground focus-visible:outline-2 focus-visible:outline-accent"
+                      >
+                        {templateOptions.map((template) => (
+                          <option key={template.key} value={template.key}>
+                            {template.name}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                    <label className="text-sm font-semibold">
+                      Version
+                      <select
+                        value={selectedSummary?.id ?? ""}
+                        onChange={(event) => setSelectedSummaryId(event.target.value)}
+                        disabled={!selectedGroup}
+                        className="mt-1 h-10 w-full rounded-lg border border-border bg-background px-3 text-sm text-foreground disabled:opacity-60 focus-visible:outline-2 focus-visible:outline-accent"
+                      >
+                        {!selectedGroup && <option value="">No versions</option>}
+                        {selectedGroup?.history.map((summary) => (
+                          <option key={summary.id} value={summary.id}>
+                            v{summary.version} · {formatDateTime(summary.createdAt)}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                  </div>
+                  <Button
+                    type="button"
+                    onClick={() => summarizeMutation.mutate()}
+                    disabled={!canSummarize || summarizeMutation.isPending}
+                    aria-busy={summarizeMutation.isPending}
+                  >
+                    {summarizeMutation.isPending ? (
+                      <Loader2 className="h-4 w-4 animate-spin" aria-hidden />
+                    ) : (
+                      <Sparkles className="h-4 w-4" aria-hidden />
+                    )}
+                    {selectedGroup?.latest.status === "completed"
+                      ? "Regenerate summary"
+                      : "Generate summary"}
+                  </Button>
+                </div>
+
+                {selectedSummary?.status === "completed" && selectedSummary.content ? (
+                  <article className="max-w-none whitespace-pre-wrap rounded-lg bg-background p-4 text-sm leading-7 text-foreground">
+                    {selectedSummary.content}
+                  </article>
+                ) : (
+                  <EmptyState
+                    icon={selectedSummary?.status === "processing" ? Sparkles : FileText}
+                    title={
+                      selectedSummary?.status === "processing"
+                        ? "Summary is being generated"
+                        : "Summary is not available yet"
+                    }
+                    description={
+                      hasStoredTranscript
+                        ? "Generate a summary manually when the transcript is ready."
+                        : "Transcript must be available before summary generation."
+                    }
+                    action={
+                      canSummarize ? (
+                        <Button
+                          type="button"
+                          onClick={() => summarizeMutation.mutate()}
+                          disabled={summarizeMutation.isPending}
+                          aria-busy={summarizeMutation.isPending}
+                        >
+                          {summarizeMutation.isPending ? (
+                            <Loader2 className="h-4 w-4 animate-spin" aria-hidden />
+                          ) : (
+                            <Sparkles className="h-4 w-4" aria-hidden />
+                          )}
+                          {selectedGroup?.latest.status === "completed"
+                            ? "Regenerate summary"
+                            : "Generate summary"}
+                        </Button>
+                      ) : undefined
+                    }
+                    className="min-h-[400px] border-0 bg-background"
+                  />
+                )}
               </div>
             ) : (
               <div className="p-4">
@@ -775,6 +1000,16 @@ export function MeetingDetailPage() {
               <div className="flex items-center justify-between gap-3">
                 <span className="text-muted-foreground">Screenshots</span>
                 <span className="font-semibold">{meeting.screenshots.length}</span>
+              </div>
+              <div className="flex items-center justify-between gap-3">
+                <span className="text-muted-foreground">Summary</span>
+                <span className="font-semibold">
+                  {selectedSummary?.status === "completed"
+                    ? "Ready"
+                    : selectedSummary?.status === "processing"
+                      ? "Processing"
+                      : "Not generated"}
+                </span>
               </div>
             </div>
           </Card>

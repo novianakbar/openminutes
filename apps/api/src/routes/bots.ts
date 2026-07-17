@@ -17,11 +17,12 @@ import {
   getRecording,
   getStoredObject,
 } from "../services/storage";
-import { enqueueTranscription } from "../services/queue";
+import { enqueueSummary, enqueueTranscription } from "../services/queue";
 import {
   enqueueScheduledBot,
   removeScheduledBotJob,
 } from "../services/scheduledBots";
+import { createSummaryVersion, listSummaryGroups } from "../services/summaries";
 import { mintViewToken, VIEW_TOKEN_TTL_SEC } from "../services/viewToken";
 import { isLiveStatus } from "../services/vncProxy";
 import { subscribeLiveTranscript } from "../services/liveTranscription";
@@ -65,6 +66,10 @@ const listMeetingsQuerySchema = z.object({
 const screenshotParamsSchema = z.object({
   id: z.string().uuid(),
   screenshotId: z.coerce.number().int().positive(),
+});
+
+const summarizeSchema = z.object({
+  templateKey: z.string().trim().min(1).max(60).default("default"),
 });
 
 const activeStatuses = ["joining", "waiting_admission", "recording"] as const;
@@ -417,8 +422,18 @@ export async function botRoutes(app: FastifyInstance) {
       .from(schema.meetingScreenshots)
       .where(eq(schema.meetingScreenshots.meetingId, id))
       .orderBy(desc(schema.meetingScreenshots.capturedAtMs));
+    const summaries = await listSummaryGroups("meeting", id);
+    const defaultSummary =
+      summaries.find((group) => group.templateKey === "default")?.latest ?? null;
 
-    return { ...meeting, transcript: segments, events, screenshots };
+    return {
+      ...meeting,
+      transcript: segments,
+      events,
+      screenshots,
+      summary: defaultSummary,
+      summaries,
+    };
   });
 
   app.delete("/bots/:id", async (req, reply) => {
@@ -514,6 +529,14 @@ export async function botRoutes(app: FastifyInstance) {
       await tx
         .delete(schema.meetingStatusEvents)
         .where(eq(schema.meetingStatusEvents.meetingId, id));
+      await tx
+        .delete(schema.summaries)
+        .where(
+          and(
+            eq(schema.summaries.sourceType, "meeting"),
+            eq(schema.summaries.sourceId, id),
+          ),
+        );
       await tx
         .delete(schema.meetings)
         .where(
@@ -611,6 +634,73 @@ export async function botRoutes(app: FastifyInstance) {
       .where(eq(schema.meetings.id, id));
     await addStatusEvent(id, "processing_transcript", "Transcription restarted");
     return { meetingId: id, status: "processing_transcript" };
+  });
+
+  app.post("/meetings/:id/summarize", async (req, reply) => {
+    const user = (req as any).user;
+    const { id } = req.params as { id: string };
+    const parsed = summarizeSchema.safeParse(req.body ?? {});
+    if (!parsed.success) {
+      return reply
+        .code(400)
+        .send({ error: "Invalid request body", details: parsed.error.flatten() });
+    }
+    const [meeting] = await db
+      .select()
+      .from(schema.meetings)
+      .where(
+        and(eq(schema.meetings.id, id), eq(schema.meetings.userId, user.id)),
+      )
+      .limit(1);
+    if (!meeting) return reply.code(404).send({ error: "Meeting not found" });
+
+    const [{ value: transcriptCount }] = await db
+      .select({ value: count() })
+      .from(schema.transcriptSegments)
+      .where(eq(schema.transcriptSegments.meetingId, id));
+    if ((transcriptCount ?? 0) === 0) {
+      return reply.code(409).send({
+        error: "Transcript is required before generating a summary",
+      });
+    }
+
+    const summary = await createSummaryVersion({
+      sourceType: "meeting",
+      sourceId: id,
+      templateKey: parsed.data.templateKey,
+      triggeredByUserId: user.id,
+    });
+    if (!summary) {
+      return reply.code(404).send({ error: "Summary template not found or disabled" });
+    }
+
+    let result;
+    try {
+      result = await enqueueSummary({
+        sourceType: "meeting",
+        sourceId: id,
+        templateKey: parsed.data.templateKey,
+        summaryId: summary.id,
+      });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      await db
+        .update(schema.summaries)
+        .set({
+          status: "failed",
+          error: `Unable to queue summary: ${message}`,
+          updatedAt: new Date(),
+        })
+        .where(eq(schema.summaries.id, summary.id));
+      return reply.code(502).send({ error: `Unable to queue summary: ${message}` });
+    }
+    if (result === "already_running") {
+      return reply.code(409).send({
+        error: "Summary generation is already queued",
+      });
+    }
+
+    return { meetingId: id, summaryId: summary.id, status: "processing" };
   });
 
   // Token berumur pendek untuk membuka WS live view (docs/live-view-design.md §5.5).

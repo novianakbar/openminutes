@@ -5,7 +5,6 @@ import {
   serial,
   text,
   timestamp,
-  uniqueIndex,
   uuid,
 } from "drizzle-orm/pg-core";
 
@@ -189,28 +188,32 @@ export const audioSummaryTranscriptSegments = pgTable("audio_summary_transcript_
   text: text("text").notNull(),
 });
 
-export const summaries = pgTable(
-  "summaries",
-  {
-    id: uuid("id").defaultRandom().primaryKey(),
-    sourceType: text("source_type").notNull(),
-    sourceId: uuid("source_id").notNull(),
-    templateKey: text("template_key").notNull().default("default"),
-    status: text("status").notNull().default("pending"),
-    content: text("content"),
-    model: text("model"),
-    error: text("error"),
-    createdAt: timestamp("created_at").defaultNow().notNull(),
-    updatedAt: timestamp("updated_at").defaultNow().notNull(),
-  },
-  (table) => [
-    uniqueIndex("summaries_source_template_idx").on(
-      table.sourceType,
-      table.sourceId,
-      table.templateKey,
-    ),
-  ],
-);
+export const summaryTemplates = pgTable("summary_templates", {
+  key: text("key").primaryKey(),
+  name: text("name").notNull(),
+  description: text("description").notNull().default(""),
+  systemPrompt: text("system_prompt").notNull(),
+  userPrompt: text("user_prompt").notNull(),
+  enabled: boolean("enabled").notNull().default(true),
+  sortOrder: integer("sort_order").notNull().default(0),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+});
+
+export const summaries = pgTable("summaries", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  sourceType: text("source_type").notNull(),
+  sourceId: uuid("source_id").notNull(),
+  templateKey: text("template_key").notNull().default("default"),
+  version: integer("version").notNull().default(1),
+  status: text("status").notNull().default("pending"),
+  content: text("content"),
+  model: text("model"),
+  error: text("error"),
+  triggeredByUserId: text("triggered_by_user_id").references(() => user.id),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+});
 
 export const meetingScreenshots = pgTable("meeting_screenshots", {
   id: serial("id").primaryKey(),

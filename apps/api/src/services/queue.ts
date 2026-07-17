@@ -40,6 +40,7 @@ export interface SummaryJobData {
   sourceType: SummarySourceType;
   sourceId: string;
   templateKey: string;
+  summaryId: string;
 }
 
 // jobId deterministik per meeting supaya enqueue idempoten: klik retry dobel
@@ -80,7 +81,7 @@ export async function enqueueSourceTranscription(
 export async function enqueueSummary(
   data: SummaryJobData,
 ): Promise<EnqueueResult> {
-  const jobId = `summary-${data.sourceType}-${data.sourceId}-${data.templateKey}`;
+  const jobId = `summary-${data.summaryId}`;
 
   const existing = await summaryQueue.getJob(jobId);
   if (existing) {

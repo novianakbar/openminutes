@@ -52,6 +52,7 @@ interface SummaryJobData {
   sourceType: SummarySourceType;
   sourceId: string;
   templateKey: string;
+  summaryId: string;
 }
 
 async function downloadAudio(objectKey: string): Promise<Buffer> {
@@ -294,6 +295,8 @@ async function generateSummaryWithOpenAICompatible(opts: {
   title: string;
   language: string;
   transcript: string;
+  systemPrompt: string;
+  userPrompt: string;
   baseUrl: string;
   apiKey: string | null;
   model: string;
@@ -316,8 +319,7 @@ async function generateSummaryWithOpenAICompatible(opts: {
         messages: [
           {
             role: "system",
-            content:
-              "You create concise, useful meeting/audio summaries. Return markdown only.",
+            content: opts.systemPrompt,
           },
           {
             role: "user",
@@ -325,12 +327,7 @@ async function generateSummaryWithOpenAICompatible(opts: {
               `Title: ${opts.title}`,
               `Summary language: ${opts.language}`,
               "",
-              "Create a simple summary with these sections:",
-              "## Ringkasan",
-              "## Poin Penting",
-              "## Action Items",
-              "",
-              "If action items are not explicit, write '- Tidak ada action item eksplisit.'",
+              opts.userPrompt,
               "",
               "Transcript:",
               transcript,
@@ -360,13 +357,7 @@ async function markSummaryFailed(data: SummaryJobData, message: string) {
   await db
     .update(schema.summaries)
     .set({ status: "failed", error: message, updatedAt: new Date() })
-    .where(
-      and(
-        eq(schema.summaries.sourceType, data.sourceType),
-        eq(schema.summaries.sourceId, data.sourceId),
-        eq(schema.summaries.templateKey, data.templateKey),
-      ),
-    );
+    .where(eq(schema.summaries.id, data.summaryId));
 }
 
 const transcriptionWorker = new Worker<TranscriptionJobData>(
@@ -421,6 +412,19 @@ const summaryWorker = new Worker<SummaryJobData>(
     if (!settings?.baseUrl || !settings.model) {
       throw new Error("AI summary provider is not configured");
     }
+    const [template] = await db
+      .select()
+      .from(schema.summaryTemplates)
+      .where(
+        and(
+          eq(schema.summaryTemplates.key, templateKey),
+          eq(schema.summaryTemplates.enabled, true),
+        ),
+      )
+      .limit(1);
+    if (!template) {
+      throw new Error("Summary template was not found or is disabled");
+    }
 
     const source = await loadSummarySource(sourceType, sourceId);
     if (source.transcript.length === 0) {
@@ -431,37 +435,23 @@ const summaryWorker = new Worker<SummaryJobData>(
       title: source.title,
       language: source.language,
       transcript: transcriptToPrompt(source.transcript),
+      systemPrompt: template.systemPrompt,
+      userPrompt: template.userPrompt,
       baseUrl: settings.baseUrl,
       apiKey: settings.apiKey,
       model: settings.model,
     });
 
     await db
-      .insert(schema.summaries)
-      .values({
-        sourceType,
-        sourceId,
-        templateKey,
+      .update(schema.summaries)
+      .set({
         status: "completed",
         content,
         model: settings.model,
         error: null,
         updatedAt: new Date(),
       })
-      .onConflictDoUpdate({
-        target: [
-          schema.summaries.sourceType,
-          schema.summaries.sourceId,
-          schema.summaries.templateKey,
-        ],
-        set: {
-          status: "completed",
-          content,
-          model: settings.model,
-          error: null,
-          updatedAt: new Date(),
-        },
-      });
+      .where(eq(schema.summaries.id, job.data.summaryId));
   },
   { connection, concurrency: 1 },
 );

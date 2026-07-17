@@ -19,6 +19,7 @@ import {
   enqueueSourceTranscription,
   enqueueSummary,
 } from "../services/queue";
+import { createSummaryVersion, listSummaryGroups } from "../services/summaries";
 
 const MAX_AUDIO_UPLOAD_BYTES = 250 * 1024 * 1024;
 const DEFAULT_TEMPLATE_KEY = "default";
@@ -37,6 +38,10 @@ const listQuerySchema = z.object({
       "failed",
     ])
     .default("all"),
+});
+
+const summarizeSchema = z.object({
+  templateKey: z.string().trim().min(1).max(60).default(DEFAULT_TEMPLATE_KEY),
 });
 
 function fieldValue(fields: Record<string, unknown>, key: string): string | null {
@@ -168,12 +173,18 @@ export async function audioSummaryRoutes(app: FastifyInstance) {
               eq(schema.summaries.templateKey, DEFAULT_TEMPLATE_KEY),
             ),
           )
+          .orderBy(desc(schema.summaries.version), desc(schema.summaries.createdAt))
       : [];
 
     const transcriptCountById = new Map(
       transcriptCounts.map((row) => [row.audioSummaryId, row.value]),
     );
-    const summaryById = new Map(summaries.map((summary) => [summary.sourceId, summary]));
+    const summaryById = new Map<string, (typeof summaries)[number]>();
+    for (const summary of summaries) {
+      if (!summaryById.has(summary.sourceId)) {
+        summaryById.set(summary.sourceId, summary);
+      }
+    }
 
     return {
       items: items.map((item) => ({
@@ -295,6 +306,7 @@ export async function audioSummaryRoutes(app: FastifyInstance) {
       ...audioSummary,
       transcript: [],
       summary: null,
+      summaries: [],
     });
   });
 
@@ -309,22 +321,16 @@ export async function audioSummaryRoutes(app: FastifyInstance) {
       .from(schema.audioSummaryTranscriptSegments)
       .where(eq(schema.audioSummaryTranscriptSegments.audioSummaryId, id))
       .orderBy(asc(schema.audioSummaryTranscriptSegments.startMs));
-    const [summary] = await db
-      .select()
-      .from(schema.summaries)
-      .where(
-        and(
-          eq(schema.summaries.sourceType, "audio_summary"),
-          eq(schema.summaries.sourceId, id),
-          eq(schema.summaries.templateKey, DEFAULT_TEMPLATE_KEY),
-        ),
-      )
-      .limit(1);
+    const summaries = await listSummaryGroups("audio_summary", id);
+    const defaultSummary =
+      summaries.find((group) => group.templateKey === DEFAULT_TEMPLATE_KEY)?.latest ??
+      null;
 
     return {
       ...audioSummary,
       transcript,
-      summary: summary ?? null,
+      summary: defaultSummary,
+      summaries,
     };
   });
 
@@ -376,6 +382,12 @@ export async function audioSummaryRoutes(app: FastifyInstance) {
   app.post("/audio-summaries/:id/summarize", async (req, reply) => {
     const user = (req as any).user;
     const { id } = req.params as { id: string };
+    const parsed = summarizeSchema.safeParse(req.body ?? {});
+    if (!parsed.success) {
+      return reply
+        .code(400)
+        .send({ error: "Invalid request body", details: parsed.error.flatten() });
+    }
     const audioSummary = await loadOwnedAudioSummary(user.id, id);
     if (!audioSummary) return reply.code(404).send({ error: "Audio summary not found" });
 
@@ -389,37 +401,43 @@ export async function audioSummaryRoutes(app: FastifyInstance) {
       });
     }
 
-    await db
-      .insert(schema.summaries)
-      .values({
-        sourceType: "audio_summary",
-        sourceId: id,
-        templateKey: DEFAULT_TEMPLATE_KEY,
-        status: "processing",
-        error: null,
-        updatedAt: new Date(),
-      })
-      .onConflictDoUpdate({
-        target: [
-          schema.summaries.sourceType,
-          schema.summaries.sourceId,
-          schema.summaries.templateKey,
-        ],
-        set: { status: "processing", error: null, updatedAt: new Date() },
-      });
-
-    const result = await enqueueSummary({
+    const summary = await createSummaryVersion({
       sourceType: "audio_summary",
       sourceId: id,
-      templateKey: DEFAULT_TEMPLATE_KEY,
+      templateKey: parsed.data.templateKey,
+      triggeredByUserId: user.id,
     });
+    if (!summary) {
+      return reply.code(404).send({ error: "Summary template not found or disabled" });
+    }
+
+    let result;
+    try {
+      result = await enqueueSummary({
+        sourceType: "audio_summary",
+        sourceId: id,
+        templateKey: parsed.data.templateKey,
+        summaryId: summary.id,
+      });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      await db
+        .update(schema.summaries)
+        .set({
+          status: "failed",
+          error: `Unable to queue summary: ${message}`,
+          updatedAt: new Date(),
+        })
+        .where(eq(schema.summaries.id, summary.id));
+      return reply.code(502).send({ error: `Unable to queue summary: ${message}` });
+    }
     if (result === "already_running") {
       return reply.code(409).send({
         error: "Summary generation is already queued",
       });
     }
 
-    return { audioSummaryId: id, status: "processing" };
+    return { audioSummaryId: id, summaryId: summary.id, status: "processing" };
   });
 
   app.delete("/audio-summaries/:id", async (req, reply) => {

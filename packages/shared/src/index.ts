@@ -17,6 +17,71 @@ export interface SummarySettings {
   model: string | null;
 }
 
+export interface SummaryTemplateDefinition {
+  key: string;
+  name: string;
+  description: string;
+  systemPrompt: string;
+  userPrompt: string;
+  enabled: boolean;
+  sortOrder: number;
+}
+
+export const DEFAULT_SUMMARY_TEMPLATES: SummaryTemplateDefinition[] = [
+  {
+    key: "default",
+    name: "Default Summary",
+    description: "Ringkasan umum dengan poin penting dan action items.",
+    systemPrompt:
+      "You create concise, useful meeting/audio summaries. Return markdown only.",
+    userPrompt: [
+      "Create a simple summary with these sections:",
+      "## Ringkasan",
+      "## Poin Penting",
+      "## Action Items",
+      "",
+      "If action items are not explicit, write '- Tidak ada action item eksplisit.'",
+    ].join("\n"),
+    enabled: true,
+    sortOrder: 10,
+  },
+  {
+    key: "action_items",
+    name: "Action Items",
+    description: "Fokus pada tugas, owner, deadline, dan follow-up.",
+    systemPrompt:
+      "You extract concrete action items from transcripts. Return markdown only.",
+    userPrompt: [
+      "Create an action-focused summary with these sections:",
+      "## Action Items",
+      "- Include owner and deadline when explicit.",
+      "- If owner or deadline is missing, write 'Tidak disebutkan'.",
+      "## Follow-ups",
+      "## Open Questions",
+    ].join("\n"),
+    enabled: true,
+    sortOrder: 20,
+  },
+  {
+    key: "executive_brief",
+    name: "Executive Brief",
+    description: "Ringkasan singkat untuk leadership dan keputusan utama.",
+    systemPrompt:
+      "You write executive-ready briefs from meeting/audio transcripts. Return markdown only.",
+    userPrompt: [
+      "Create a concise executive brief with these sections:",
+      "## Executive Summary",
+      "## Key Decisions",
+      "## Risks",
+      "## Next Steps",
+      "",
+      "Keep it short and prioritize business impact.",
+    ].join("\n"),
+    enabled: true,
+    sortOrder: 30,
+  },
+];
+
 export type Platform = "google_meet" | "teams" | "zoom";
 export type TranscriptionMode = "post_meeting" | "realtime";
 export const TRANSCRIPTION_LANGUAGES = [

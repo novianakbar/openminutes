@@ -1,8 +1,13 @@
 import type { FastifyInstance } from "fastify";
 import { fromNodeHeaders } from "better-auth/node";
+import { eq } from "drizzle-orm";
 import { z } from "zod";
 import { auth } from "../auth";
 import { db, schema } from "../db";
+import {
+  ensureDefaultSummaryTemplates,
+  listSummaryTemplates,
+} from "../services/summaryTemplates";
 
 const settingsSchema = z.object({
   provider: z.enum(["deepgram", "openai_compatible"]),
@@ -17,6 +22,27 @@ const summarySettingsSchema = z.object({
   baseUrl: z.string().url().nullable().default(null),
   model: z.string().nullable().default(null),
 });
+
+const templateKeySchema = z
+  .string()
+  .trim()
+  .min(2)
+  .max(60)
+  .regex(/^[a-z0-9][a-z0-9_-]*[a-z0-9]$/);
+
+const summaryTemplateCreateSchema = z.object({
+  key: templateKeySchema,
+  name: z.string().trim().min(1).max(120),
+  description: z.string().trim().max(500).default(""),
+  systemPrompt: z.string().trim().min(1).max(8000),
+  userPrompt: z.string().trim().min(1).max(12000),
+  enabled: z.boolean().default(true),
+  sortOrder: z.number().int().min(0).max(10_000).default(100),
+});
+
+const summaryTemplateUpdateSchema = summaryTemplateCreateSchema
+  .omit({ key: true })
+  .partial();
 
 const defaultSettings = {
   provider: "deepgram",
@@ -91,5 +117,65 @@ export async function adminRoutes(app: FastifyInstance) {
         set: { ...parsed.data, updatedAt: new Date() },
       });
     return parsed.data;
+  });
+
+  app.get("/summary-templates", async () => {
+    return listSummaryTemplates();
+  });
+
+  app.post("/summary-templates", async (req, reply) => {
+    await ensureDefaultSummaryTemplates();
+    const parsed = summaryTemplateCreateSchema.safeParse(req.body);
+    if (!parsed.success) {
+      return reply
+        .code(400)
+        .send({ error: "Invalid request body", details: parsed.error.flatten() });
+    }
+
+    try {
+      const [template] = await db
+        .insert(schema.summaryTemplates)
+        .values({ ...parsed.data, updatedAt: new Date() })
+        .returning();
+      return reply.code(201).send(template);
+    } catch (err) {
+      if ((err as { code?: string })?.code === "23505") {
+        return reply.code(409).send({ error: "Template key already exists" });
+      }
+      throw err;
+    }
+  });
+
+  app.patch("/summary-templates/:key", async (req, reply) => {
+    await ensureDefaultSummaryTemplates();
+    const key = templateKeySchema.safeParse((req.params as { key: string }).key);
+    if (!key.success) return reply.code(400).send({ error: "Invalid template key" });
+    const parsed = summaryTemplateUpdateSchema.safeParse(req.body);
+    if (!parsed.success) {
+      return reply
+        .code(400)
+        .send({ error: "Invalid request body", details: parsed.error.flatten() });
+    }
+
+    const [template] = await db
+      .update(schema.summaryTemplates)
+      .set({ ...parsed.data, updatedAt: new Date() })
+      .where(eq(schema.summaryTemplates.key, key.data))
+      .returning();
+    if (!template) return reply.code(404).send({ error: "Template not found" });
+    return template;
+  });
+
+  app.delete("/summary-templates/:key", async (req, reply) => {
+    await ensureDefaultSummaryTemplates();
+    const key = templateKeySchema.safeParse((req.params as { key: string }).key);
+    if (!key.success) return reply.code(400).send({ error: "Invalid template key" });
+
+    const [template] = await db
+      .delete(schema.summaryTemplates)
+      .where(eq(schema.summaryTemplates.key, key.data))
+      .returning();
+    if (!template) return reply.code(404).send({ error: "Template not found" });
+    return { key: key.data, deleted: true };
   });
 }
