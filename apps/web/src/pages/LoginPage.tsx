@@ -13,18 +13,28 @@ export function LoginPage() {
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const navigate = useNavigate();
+  const session = authClient.useSession();
 
   async function handleSubmit(e: FormEvent) {
     e.preventDefault();
     setError(null);
     setLoading(true);
-    const { error } = await authClient.signIn.email({ email, password });
-    setLoading(false);
-    if (error) {
-      setError(error.message ?? "Unable to sign in");
-      return;
+    try {
+      const { error } = await authClient.signIn.email(
+        { email, password },
+        { disableSignal: true },
+      );
+      if (error) {
+        setError(error.message ?? "Unable to sign in");
+        return;
+      }
+      await session.refetch({ query: { disableCookieCache: true } });
+      navigate("/meetings", { replace: true });
+    } catch {
+      setError("Unable to sign in");
+    } finally {
+      setLoading(false);
     }
-    navigate("/meetings", { replace: true });
   }
 
   return (
