@@ -75,6 +75,7 @@ async function startScheduledMeeting(meetingId: string): Promise<void> {
       mode: meeting.mode as TranscriptionMode,
       botName: meeting.botName,
       captureScreenshots: meeting.captureScreenshots,
+      captureVideo: meeting.captureVideo,
     });
     await db
       .update(schema.meetings)

@@ -3,14 +3,21 @@ import { mkdir, readFile, stat, writeFile } from "node:fs/promises";
 import { chromium as vanillaChromium, type BrowserContext } from "playwright";
 import { chromium as stealthChromium } from "playwright-extra";
 import StealthPlugin from "puppeteer-extra-plugin-stealth";
-import { reportRecording, reportScreenshot, reportStatus } from "./api.js";
+import {
+  reportRecording,
+  reportScreenshot,
+  reportStatus,
+  reportVideo,
+  reportVideoFailure,
+} from "./api.js";
 import { startRecording, type Recorder } from "./audio.js";
 import { startLiveTranscriptionStream, type LiveTranscriptionStream } from "./liveTranscription.js";
 import {
   startScreenshotCapture,
   type ScreenshotCapture,
 } from "./screenshots.js";
-import { uploadRecording, uploadScreenshot } from "./upload.js";
+import { startVideoRecording, type VideoRecorder } from "./video.js";
+import { uploadRecording, uploadScreenshot, uploadVideo } from "./upload.js";
 import { googleMeet } from "./platforms/googleMeet.js";
 import { teams } from "./platforms/teams.js";
 import { zoom } from "./platforms/zoom.js";
@@ -60,6 +67,7 @@ const cfg = {
   mode: process.env.MODE ?? "post_meeting",
   botName: process.env.BOT_NAME ?? "OpenMinutes Assistant",
   captureScreenshots: booleanEnv("CAPTURE_SCREENSHOTS", true),
+  captureVideo: booleanEnv("CAPTURE_VIDEO", false),
   joinTimeoutMs: positiveNumberEnv("JOIN_TIMEOUT_SEC", 300) * 1000,
   maxDurationMs: positiveNumberEnv("MAX_DURATION_MIN", 180) * 60_000,
   screenshotIntervalMs: positiveNumberEnv("SCREENSHOT_INTERVAL_SEC", 10) * 1000,
@@ -151,6 +159,7 @@ async function grantMediaPermissions(
 }
 
 const RECORDING_PATH = "/tmp/recording.ogg";
+const VIDEO_RECORDING_PATH = "/tmp/recording.mp4";
 const PROFILE_DIR = "/tmp/profile";
 
 // Media palsu "aman": fake device bawaan Chromium menghasilkan nada beep
@@ -281,6 +290,9 @@ async function main() {
 
   await reportStatus(cfg.meetingId, "recording");
   const recorder = startRecording(RECORDING_PATH);
+  const videoRecorder = cfg.captureVideo
+    ? startVideoRecording(VIDEO_RECORDING_PATH)
+    : null;
   const screenshots = cfg.captureScreenshots
     ? startScreenshotCapture(page, {
         startedAt: recorder.startedAt,
@@ -315,7 +327,7 @@ async function main() {
   ]);
   console.log(`Meeting ended: ${endReason}`);
 
-  await finish(recorder, liveTranscription, screenshots);
+  await finish(recorder, liveTranscription, screenshots, videoRecorder);
   await context.close().catch(() => {});
 }
 
@@ -323,6 +335,7 @@ async function finish(
   recorder: Recorder,
   liveTranscription: LiveTranscriptionStream | null,
   screenshots: ScreenshotCapture | null,
+  videoRecorder: VideoRecorder | null,
 ) {
   const durationSec = Math.round((Date.now() - recorder.startedAt) / 1000);
   await screenshots?.stop().catch((err) => {
@@ -331,7 +344,16 @@ async function finish(
   await liveTranscription?.stop().catch((err) => {
     console.error("live transcription finalize gagal:", err);
   });
-  await recorder.stop();
+
+  let videoStopError: unknown = null;
+  await Promise.all([
+    recorder.stop(),
+    videoRecorder?.stop().catch((err) => {
+      videoStopError = err;
+      console.error("video recording finalize gagal:", err);
+    }),
+  ]);
+
   const fileSize = await stat(RECORDING_PATH)
     .then((s) => s.size)
     .catch(() => 0);
@@ -345,6 +367,39 @@ async function finish(
   const objectKey = await uploadRecording(cfg.meetingId, RECORDING_PATH);
   await reportRecording(cfg.meetingId, objectKey, durationSec);
   console.log(`Recording ${objectKey} (${durationSec}s) uploaded`);
+
+  if (!videoRecorder) return;
+
+  if (videoStopError) {
+    await reportVideoFailure(
+      cfg.meetingId,
+      videoStopError instanceof Error ? videoStopError.message : String(videoStopError),
+    );
+    return;
+  }
+
+  const videoSizeBytes = await stat(VIDEO_RECORDING_PATH)
+    .then((s) => s.size)
+    .catch(() => 0);
+  if (videoSizeBytes === 0) {
+    await reportVideoFailure(
+      cfg.meetingId,
+      "Video recording file is empty or missing.",
+    );
+    return;
+  }
+
+  try {
+    const videoObjectKey = await uploadVideo(cfg.meetingId, VIDEO_RECORDING_PATH);
+    await reportVideo(cfg.meetingId, videoObjectKey, videoSizeBytes);
+    console.log(`Video ${videoObjectKey} (${videoSizeBytes} bytes) uploaded`);
+  } catch (err) {
+    console.error("video upload gagal:", err);
+    await reportVideoFailure(
+      cfg.meetingId,
+      err instanceof Error ? err.message : String(err),
+    );
+  }
 }
 
 main()

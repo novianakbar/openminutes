@@ -1,4 +1,4 @@
-import type { FastifyInstance } from "fastify";
+import type { FastifyInstance, FastifyReply } from "fastify";
 import { eq, desc, asc, and, count, ilike, or, inArray, type SQL } from "drizzle-orm";
 import { fromNodeHeaders } from "better-auth/node";
 import { z } from "zod";
@@ -14,8 +14,9 @@ import { spawnBot, stopBot, isContainerGone } from "../services/botManager";
 import {
   deleteRecording,
   deleteStoredObject,
-  getRecording,
   getStoredObject,
+  getStoredObjectMetadata,
+  getStoredObjectRange,
 } from "../services/storage";
 import { enqueueSummary, enqueueTranscription } from "../services/queue";
 import {
@@ -34,6 +35,7 @@ const createBotSchema = z.object({
   language: z.enum(TRANSCRIPTION_LANGUAGE_CODES).default("id"),
   botName: z.string().min(1).max(60).default("OpenMinutes Assistant"),
   captureScreenshots: z.boolean().default(true),
+  captureVideo: z.boolean().default(false),
   scheduledStartAt: z.string().datetime().optional(),
 });
 
@@ -73,6 +75,123 @@ const summarizeSchema = z.object({
 });
 
 const activeStatuses = ["joining", "waiting_admission", "recording"] as const;
+
+type ParsedRange =
+  | { kind: "full" }
+  | { kind: "partial"; start: number; end: number; length: number }
+  | { kind: "invalid" };
+
+function parseRangeHeader(
+  rangeHeader: string | string[] | undefined,
+  totalSize: number,
+): ParsedRange {
+  if (!rangeHeader) return { kind: "full" };
+  if (Array.isArray(rangeHeader)) return { kind: "invalid" };
+
+  const range = rangeHeader.trim();
+  if (range.includes(",")) return { kind: "invalid" };
+
+  const match = /^bytes=(\d*)-(\d*)$/.exec(range);
+  if (!match) return { kind: "invalid" };
+
+  const [, rawStart, rawEnd] = match;
+  if (!rawStart && !rawEnd) return { kind: "invalid" };
+  if (totalSize <= 0) return { kind: "invalid" };
+
+  if (!rawStart) {
+    const suffixLength = Number(rawEnd);
+    if (
+      !Number.isSafeInteger(suffixLength) ||
+      suffixLength <= 0
+    ) {
+      return { kind: "invalid" };
+    }
+    const length = Math.min(suffixLength, totalSize);
+    const start = totalSize - length;
+    return { kind: "partial", start, end: totalSize - 1, length };
+  }
+
+  const start = Number(rawStart);
+  if (!Number.isSafeInteger(start) || start < 0 || start >= totalSize) {
+    return { kind: "invalid" };
+  }
+
+  let end = totalSize - 1;
+  if (rawEnd) {
+    const parsedEnd = Number(rawEnd);
+    if (
+      !Number.isSafeInteger(parsedEnd) ||
+      parsedEnd < start
+    ) {
+      return { kind: "invalid" };
+    }
+    end = Math.min(parsedEnd, totalSize - 1);
+  }
+
+  return { kind: "partial", start, end, length: end - start + 1 };
+}
+
+function wantsDownload(query: unknown): boolean {
+  return (query as { download?: string | string[] | undefined })?.download === "1";
+}
+
+async function sendStoredMedia(
+  reply: FastifyReply,
+  opts: {
+    objectKey: string;
+    rangeHeader: string | string[] | undefined;
+    contentType: string;
+    filename: string;
+    download: boolean;
+  },
+): Promise<boolean> {
+  const metadata = await getStoredObjectMetadata(opts.objectKey);
+  if (!metadata) return false;
+
+  const disposition = opts.download ? "attachment" : "inline";
+  const contentDisposition = `${disposition}; filename="${opts.filename}"`;
+  const totalSize = metadata.sizeBytes;
+  const parsedRange = parseRangeHeader(opts.rangeHeader, totalSize);
+
+  reply
+    .header("accept-ranges", "bytes")
+    .header("content-type", opts.contentType)
+    .header("content-disposition", contentDisposition);
+
+  if (parsedRange.kind === "invalid") {
+    reply
+      .code(416)
+      .header("content-range", `bytes */${totalSize}`)
+      .header("content-length", "0")
+      .send();
+    return true;
+  }
+
+  if (parsedRange.kind === "partial") {
+    const stream = await getStoredObjectRange(
+      opts.objectKey,
+      parsedRange.start,
+      parsedRange.length,
+    );
+    if (!stream) return false;
+    reply
+      .code(206)
+      .header(
+        "content-range",
+        `bytes ${parsedRange.start}-${parsedRange.end}/${totalSize}`,
+      )
+      .header("content-length", parsedRange.length)
+      .send(stream);
+    return true;
+  }
+
+  const object = await getStoredObject(opts.objectKey);
+  if (!object) return false;
+  reply
+    .header("content-length", object.sizeBytes)
+    .send(object.stream);
+  return true;
+}
 
 async function addStatusEvent(
   meetingId: string,
@@ -128,7 +247,14 @@ export async function botRoutes(app: FastifyInstance) {
         .code(400)
         .send({ error: "Invalid request body", details: parsed.error.flatten() });
     }
-    const { meetingUrl, mode, language, botName, captureScreenshots } = parsed.data;
+    const {
+      meetingUrl,
+      mode,
+      language,
+      botName,
+      captureScreenshots,
+      captureVideo,
+    } = parsed.data;
     const scheduledStartAt = parsed.data.scheduledStartAt
       ? new Date(parsed.data.scheduledStartAt)
       : null;
@@ -167,6 +293,7 @@ export async function botRoutes(app: FastifyInstance) {
         language,
         botName,
         captureScreenshots,
+        captureVideo,
         status: scheduledStartAt ? "scheduled" : "pending",
         scheduledStartAt,
       })
@@ -215,6 +342,7 @@ export async function botRoutes(app: FastifyInstance) {
         mode,
         botName,
         captureScreenshots,
+        captureVideo,
       });
       await db
         .update(schema.meetings)
@@ -511,6 +639,9 @@ export async function botRoutes(app: FastifyInstance) {
     if (meeting.audioObjectKey) {
       await deleteRecording(meeting.audioObjectKey);
     }
+    if (meeting.videoObjectKey) {
+      await deleteStoredObject(meeting.videoObjectKey);
+    }
     const screenshots = await db
       .select()
       .from(schema.meetingScreenshots)
@@ -758,18 +889,44 @@ export async function botRoutes(app: FastifyInstance) {
       return reply.code(404).send({ error: "Recording is not available yet" });
     }
 
-    const recording = await getRecording(meeting.audioObjectKey);
-    if (!recording) {
+    const sent = await sendStoredMedia(reply, {
+      objectKey: meeting.audioObjectKey,
+      rangeHeader: req.headers.range,
+      contentType: "audio/ogg",
+      filename: `meeting-${id}.ogg`,
+      download: wantsDownload(req.query),
+    });
+    if (!sent) {
       return reply.code(404).send({ error: "Recording file was not found in storage" });
     }
+    return reply;
+  });
 
-    return reply
-      .header("content-type", "audio/ogg")
-      .header("content-length", recording.sizeBytes)
-      .header(
-        "content-disposition",
-        `attachment; filename="meeting-${id}.ogg"`,
+  app.get("/meetings/:id/video", async (req, reply) => {
+    const user = (req as any).user;
+    const { id } = req.params as { id: string };
+    const [meeting] = await db
+      .select()
+      .from(schema.meetings)
+      .where(
+        and(eq(schema.meetings.id, id), eq(schema.meetings.userId, user.id)),
       )
-      .send(recording.stream);
+      .limit(1);
+    if (!meeting) return reply.code(404).send({ error: "Meeting not found" });
+    if (!meeting.videoObjectKey) {
+      return reply.code(404).send({ error: "Video recording is not available yet" });
+    }
+
+    const sent = await sendStoredMedia(reply, {
+      objectKey: meeting.videoObjectKey,
+      rangeHeader: req.headers.range,
+      contentType: "video/mp4",
+      filename: `meeting-${id}.mp4`,
+      download: wantsDownload(req.query),
+    });
+    if (!sent) {
+      return reply.code(404).send({ error: "Video file was not found in storage" });
+    }
+    return reply;
   });
 }

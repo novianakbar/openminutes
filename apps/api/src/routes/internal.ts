@@ -26,6 +26,30 @@ const recordingSchema = z.object({
   durationSec: z.number().int().nonnegative(),
 });
 
+const videoSchema = z
+  .object({
+    objectKey: z.string().min(1).optional(),
+    sizeBytes: z.number().int().nonnegative().optional(),
+    error: z.string().min(1).optional(),
+  })
+  .superRefine((data, ctx) => {
+    if (data.error) return;
+    if (!data.objectKey) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["objectKey"],
+        message: "objectKey is required when reporting a successful video upload",
+      });
+    }
+    if (data.sizeBytes == null) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["sizeBytes"],
+        message: "sizeBytes is required when reporting a successful video upload",
+      });
+    }
+  });
+
 const screenshotSchema = z.object({
   objectKey: z.string().min(1),
   capturedAtMs: z.number().int().nonnegative(),
@@ -157,6 +181,33 @@ export async function internalRoutes(app: FastifyInstance) {
         .where(eq(schema.meetings.id, id));
       await addStatusEvent(id, "failed", `Unable to queue transcription: ${message}`);
     }
+    return { ok: true };
+  });
+
+  app.post("/meetings/:id/video", async (req, reply) => {
+    const { id } = req.params as { id: string };
+    const parsed = videoSchema.safeParse(req.body);
+    if (!parsed.success) return reply.code(400).send({ error: "Invalid request body" });
+
+    if (parsed.data.error) {
+      await addStatusEvent(id, "video_failed", parsed.data.error);
+      return { ok: true };
+    }
+
+    await db
+      .update(schema.meetings)
+      .set({
+        videoObjectKey: parsed.data.objectKey!,
+        videoSizeBytes: parsed.data.sizeBytes!,
+        updatedAt: new Date(),
+      })
+      .where(eq(schema.meetings.id, id));
+    await addStatusEvent(
+      id,
+      "video_ready",
+      `Video uploaded (${parsed.data.sizeBytes} bytes)`,
+    );
+
     return { ok: true };
   });
 

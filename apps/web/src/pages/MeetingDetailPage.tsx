@@ -10,6 +10,7 @@ import {
   FileText,
   Images,
   Loader2,
+  Download,
   MonitorPlay,
   RefreshCw,
   ScrollText,
@@ -21,7 +22,12 @@ import {
 import { api, ApiError } from "../lib/api";
 import { isBotActive, isInProgress, StatusBadge } from "../components/StatusBadge";
 import { EmptyState } from "../components/EmptyState";
-import { formatDateTime, formatDuration, formatTimestamp } from "../lib/format";
+import {
+  formatDateTime,
+  formatDuration,
+  formatFileSize,
+  formatTimestamp,
+} from "../lib/format";
 import { PLATFORM_LABEL } from "../lib/platform";
 import { PlatformIcon } from "../components/icons/PlatformIcons";
 import { Alert } from "../components/ui/Alert";
@@ -53,6 +59,8 @@ const eventLabels: Record<string, string> = {
   recording: "Recording started",
   uploading: "Audio upload started",
   recording_ready: "Recording available",
+  video_ready: "Video available",
+  video_failed: "Video recording failed",
   processing_transcript: "Transcription started",
   completed: "Completed",
   transcription_skipped: "Transcription skipped",
@@ -72,6 +80,19 @@ function isTranscriptStuck(status: string, updatedAt: string): boolean {
     status === "processing_transcript" &&
     Date.now() - new Date(updatedAt).getTime() > TRANSCRIPT_STUCK_MS
   );
+}
+
+function isVideoArtifactPending(meeting: {
+  captureVideo: boolean;
+  videoObjectKey: string | null;
+  events: MeetingStatusEvent[];
+}): boolean {
+  if (!meeting.captureVideo || meeting.videoObjectKey) return false;
+  const audioReady = meeting.events.some((event) => event.status === "recording_ready");
+  const videoTerminal = meeting.events.some((event) =>
+    ["video_ready", "video_failed"].includes(event.status),
+  );
+  return audioReady && !videoTerminal;
 }
 
 function mergeTranscriptSegments(
@@ -307,6 +328,7 @@ export function MeetingDetailPage() {
       if (hasProcessingSummary(data.summaries) || data.summary?.status === "processing") {
         return 5000;
       }
+      if (isVideoArtifactPending(data)) return 5000;
       return isInProgress(data.status) ? 5000 : false;
     },
   });
@@ -342,24 +364,7 @@ export function MeetingDetailPage() {
     (stopMutation.isSuccess && isBotActive(meeting?.status ?? ""));
 
   const hasAudio = Boolean(meeting?.audioObjectKey);
-  const {
-    data: audioUrl,
-    isPending: audioPending,
-    isError: audioError,
-  } = useQuery({
-    queryKey: ["meetings", id, "audio"],
-    queryFn: async () => URL.createObjectURL(await api.fetchAudioBlob(id!)),
-    enabled: Boolean(id) && hasAudio,
-    staleTime: Infinity,
-    gcTime: 0,
-  });
-
-  // Lepas object URL saat halaman ditinggalkan agar blob tidak menumpuk di memori
-  useEffect(() => {
-    return () => {
-      if (audioUrl) URL.revokeObjectURL(audioUrl);
-    };
-  }, [audioUrl]);
+  const hasVideo = Boolean(meeting?.videoObjectKey);
 
   useEffect(() => {
     if (!meeting) return;
@@ -945,6 +950,55 @@ export function MeetingDetailPage() {
         </div>
 
         <aside className="space-y-6">
+          {(meeting.captureVideo || hasVideo) && (
+            <Card>
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2 text-base">
+                  <MonitorPlay className="h-5 w-5 text-muted-foreground" aria-hidden />
+                  Video recording
+                </CardTitle>
+              </CardHeader>
+              <div className="p-4">
+                {!hasVideo ? (
+                  <EmptyState
+                    icon={MonitorPlay}
+                    title="Video is not available yet"
+                    description={
+                      isVideoArtifactPending(meeting)
+                        ? "The video is still being finalized and uploaded."
+                        : meeting.events.some((event) => event.status === "video_failed")
+                          ? "Video recording failed, but audio and transcript can still be used."
+                          : isInProgress(meeting.status)
+                            ? "The video appears after the meeting ends or the session is stopped."
+                            : "No video recording is available for this meeting."
+                    }
+                    className="border-0 bg-background px-4 py-10"
+                  />
+                ) : (
+                  <div className="space-y-3">
+                    <video
+                      src={api.meetingVideoUrl(meeting.id)}
+                      controls
+                      preload="metadata"
+                      className="aspect-video w-full rounded-lg bg-black"
+                    />
+                    <a
+                      href={api.meetingVideoDownloadUrl(meeting.id)}
+                      download={`meeting-${meeting.id}.mp4`}
+                      className={buttonClass({
+                        variant: "secondary",
+                        className: "w-full justify-center",
+                      })}
+                    >
+                      <Download className="h-4 w-4" aria-hidden />
+                      Download video
+                    </a>
+                  </div>
+                )}
+              </div>
+            </Card>
+          )}
+
           <Card>
             <CardHeader>
               <CardTitle className="flex items-center gap-2 text-base">
@@ -964,18 +1018,10 @@ export function MeetingDetailPage() {
                   }
                   className="border-0 bg-background px-4 py-10"
                 />
-              ) : audioPending ? (
-                <div className="flex items-center gap-2 rounded-lg bg-background px-4 py-6 text-sm text-muted-foreground">
-                  <Loader2 className="h-4 w-4 animate-spin" aria-hidden />
-                  Loading recording...
-                </div>
-              ) : audioError || !audioUrl ? (
-                <Alert tone="danger" role="alert">
-                  Unable to load the recording.
-                </Alert>
               ) : (
                 <AudioPlayer
-                  src={audioUrl}
+                  src={api.meetingAudioUrl(meeting.id)}
+                  downloadUrl={api.meetingAudioDownloadUrl(meeting.id)}
                   downloadName={`meeting-${meeting.id}.ogg`}
                 />
               )}
@@ -1000,6 +1046,18 @@ export function MeetingDetailPage() {
               <div className="flex items-center justify-between gap-3">
                 <span className="text-muted-foreground">Screenshots</span>
                 <span className="font-semibold">{meeting.screenshots.length}</span>
+              </div>
+              <div className="flex items-center justify-between gap-3">
+                <span className="text-muted-foreground">Video</span>
+                <span className="font-semibold">
+                  {meeting.videoObjectKey
+                    ? meeting.videoSizeBytes != null
+                      ? formatFileSize(meeting.videoSizeBytes)
+                      : "Ready"
+                    : meeting.captureVideo
+                      ? "Pending"
+                      : "Not requested"}
+                </span>
               </div>
               <div className="flex items-center justify-between gap-3">
                 <span className="text-muted-foreground">Summary</span>
@@ -1029,6 +1087,7 @@ export function MeetingDetailPage() {
             </p>
             <ul className="list-disc space-y-1 pl-5 text-foreground">
               <li>Audio recording</li>
+              <li>Video recording, if available</li>
               <li>Transcript</li>
               <li>Summary</li>
               <li>Session status history</li>

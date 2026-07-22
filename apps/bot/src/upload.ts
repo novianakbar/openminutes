@@ -21,6 +21,17 @@ export async function uploadRecording(
   return objectKey;
 }
 
+export async function uploadVideo(
+  meetingId: string,
+  filePath: string,
+): Promise<string> {
+  const objectKey = `${meetingId}.mp4`;
+  await minio.fPutObject(bucket, objectKey, filePath, {
+    "Content-Type": "video/mp4",
+  });
+  return objectKey;
+}
+
 export async function uploadScreenshot(
   meetingId: string,
   index: number,

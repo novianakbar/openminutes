@@ -21,6 +21,7 @@ export interface SpawnBotOptions {
   mode: TranscriptionMode;
   botName: string;
   captureScreenshots: boolean;
+  captureVideo: boolean;
 }
 
 export async function spawnBot(opts: SpawnBotOptions): Promise<string> {
@@ -48,6 +49,7 @@ export async function spawnBot(opts: SpawnBotOptions): Promise<string> {
       `MODE=${opts.mode}`,
       `BOT_NAME=${opts.botName}`,
       `CAPTURE_SCREENSHOTS=${opts.captureScreenshots ? "1" : "0"}`,
+      `CAPTURE_VIDEO=${opts.captureVideo ? "1" : "0"}`,
       `API_URL=${config.apiUrlForBots}`,
       `INTERNAL_TOKEN=${config.internalToken}`,
       `MINIO_ENDPOINT=${config.minioEndpointForBots}`,

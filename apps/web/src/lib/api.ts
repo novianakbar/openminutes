@@ -119,6 +119,7 @@ export const api = {
     language: TranscriptionLanguage;
     botName?: string;
     captureScreenshots?: boolean;
+    captureVideo?: boolean;
     scheduledStartAt?: string;
   }) =>
     request<{
@@ -213,4 +214,10 @@ export const api = {
   },
   meetingScreenshotUrl: (meetingId: string, screenshotId: number) =>
     `/api/meetings/${meetingId}/screenshots/${screenshotId}`,
+  meetingAudioUrl: (meetingId: string) => `/api/meetings/${meetingId}/audio`,
+  meetingAudioDownloadUrl: (meetingId: string) =>
+    `/api/meetings/${meetingId}/audio?download=1`,
+  meetingVideoUrl: (meetingId: string) => `/api/meetings/${meetingId}/video`,
+  meetingVideoDownloadUrl: (meetingId: string) =>
+    `/api/meetings/${meetingId}/video?download=1`,
 };

@@ -39,6 +39,24 @@ export function reportRecording(
   });
 }
 
+export function reportVideo(
+  meetingId: string,
+  objectKey: string,
+  sizeBytes: number,
+): Promise<void> {
+  return post(`/internal/meetings/${meetingId}/video`, {
+    objectKey,
+    sizeBytes,
+  });
+}
+
+export function reportVideoFailure(
+  meetingId: string,
+  error: string,
+): Promise<void> {
+  return post(`/internal/meetings/${meetingId}/video`, { error });
+}
+
 export function reportScreenshot(
   meetingId: string,
   data: {

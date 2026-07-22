@@ -30,10 +30,13 @@ export interface Meeting {
   language: string;
   botName: string;
   captureScreenshots: boolean;
+  captureVideo: boolean;
   status: BotStatus;
   scheduledStartAt: string | null;
   containerId: string | null;
   audioObjectKey: string | null;
+  videoObjectKey: string | null;
+  videoSizeBytes: number | null;
   durationSec: number | null;
   realtimeTranscriptStatus: RealtimeTranscriptStatus | null;
   realtimeTranscriptError: string | null;

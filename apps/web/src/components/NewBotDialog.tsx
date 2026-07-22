@@ -7,6 +7,7 @@ import {
   ChevronRight,
   Bot,
   Loader2,
+  MonitorPlay,
   Plus,
   Search,
   Images,
@@ -429,6 +430,7 @@ export function NewBotDialog() {
   const [mode, setMode] = useState<TranscriptionMode>("post_meeting");
   const [language, setLanguage] = useState<TranscriptionLanguage>("id");
   const [captureScreenshots, setCaptureScreenshots] = useState(true);
+  const [captureVideo, setCaptureVideo] = useState(false);
   const [joinTiming, setJoinTiming] = useState<"now" | "scheduled">("now");
   const [scheduledAt, setScheduledAt] = useState(defaultScheduledDate);
   const [scheduleError, setScheduleError] = useState<string | null>(null);
@@ -443,6 +445,7 @@ export function NewBotDialog() {
       setTitle("");
       setLanguage("id");
       setCaptureScreenshots(true);
+      setCaptureVideo(false);
       setJoinTiming("now");
       setScheduledAt(defaultScheduledDate());
       setScheduleError(null);
@@ -474,6 +477,7 @@ export function NewBotDialog() {
       language,
       botName,
       captureScreenshots,
+      captureVideo,
       ...(scheduledStartAt
         ? { scheduledStartAt: scheduledStartAt.toISOString() }
         : {}),
@@ -630,6 +634,33 @@ export function NewBotDialog() {
                   </span>
                   <span className="mt-1 block text-xs leading-5 text-muted-foreground">
                     Save visual snapshots when shared content changes during the meeting.
+                  </span>
+                </span>
+              </label>
+
+              <label
+                htmlFor="capture-video"
+                className={cn(
+                  "flex cursor-pointer items-start gap-3 rounded-lg border p-3 text-sm transition-colors duration-200",
+                  captureVideo
+                    ? "border-accent bg-accent/10"
+                    : "border-border hover:bg-surface-hover",
+                )}
+              >
+                <input
+                  id="capture-video"
+                  type="checkbox"
+                  checked={captureVideo}
+                  onChange={(event) => setCaptureVideo(event.target.checked)}
+                  className="mt-1 h-4 w-4 rounded border-border text-accent focus:ring-accent"
+                />
+                <span>
+                  <span className="flex items-center gap-2 font-bold text-foreground">
+                    <MonitorPlay className="h-4 w-4 text-muted-foreground" aria-hidden />
+                    Record video
+                  </span>
+                  <span className="mt-1 block text-xs leading-5 text-muted-foreground">
+                    Save a playable MP4 of the meeting screen and audio. This uses more storage.
                   </span>
                 </span>
               </label>

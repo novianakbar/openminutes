@@ -18,9 +18,11 @@ function formatAudioTime(value: number) {
 
 export function AudioPlayer({
   src,
+  downloadUrl,
   downloadName,
 }: {
   src: string;
+  downloadUrl?: string;
   downloadName: string;
 }) {
   const audioRef = useRef<HTMLAudioElement>(null);
@@ -153,7 +155,7 @@ export function AudioPlayer({
           {playbackRate}x
         </Button>
         <a
-          href={src}
+          href={downloadUrl ?? src}
           download={downloadName}
           className={buttonClass({
             variant: "secondary",
