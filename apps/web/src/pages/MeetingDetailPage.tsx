@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { type ReactNode, useEffect, useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { TRANSCRIPTION_LANGUAGES } from "@openminutes/shared";
@@ -17,7 +17,10 @@ import {
   Sparkles,
   Square,
   Trash2,
+  X,
   XCircle,
+  ZoomIn,
+  ZoomOut,
 } from "lucide-react";
 import { api, ApiError } from "../lib/api";
 import { isBotActive, isInProgress, StatusBadge } from "../components/StatusBadge";
@@ -37,6 +40,7 @@ import { ConfirmDialog } from "../components/ui/ConfirmDialog";
 import { AudioPlayer } from "../components/ui/AudioPlayer";
 import { cn } from "../lib/cn";
 import type {
+  MeetingDetail,
   LivePartialTranscriptSegment,
   LiveTranscriptEvent,
   MeetingStatusEvent,
@@ -157,128 +161,479 @@ function ScreenshotGallery({
   screenshots: MeetingScreenshot[];
   active: boolean;
 }) {
-  return (
-    <Card className="overflow-hidden">
-      <CardHeader>
-        <CardTitle className="flex items-center gap-2 text-base">
-          <Images className="h-5 w-5 text-muted-foreground" aria-hidden />
-          Screenshots
-        </CardTitle>
-        <p className="mt-1 text-sm text-muted-foreground">
-          Captured automatically when the visible meeting content changes.
-        </p>
-      </CardHeader>
+  const [selectedScreenshot, setSelectedScreenshot] =
+    useState<MeetingScreenshot | null>(null);
+  const [zoom, setZoom] = useState(1);
 
-      {screenshots.length === 0 ? (
-        <EmptyState
-          icon={Images}
-          title="No screenshots yet"
-          description={
-            active
-              ? "Screenshots will appear when the shared screen or visible content changes."
-              : "No screenshots were captured."
-          }
-          className="m-4 border-0 bg-background px-4 py-10"
-        />
-      ) : (
-        <div className="grid gap-3 p-4 sm:grid-cols-2 lg:grid-cols-3">
-          {screenshots.map((screenshot) => {
-            const src = api.meetingScreenshotUrl(meetingId, screenshot.id);
-            return (
-              <a
-                key={screenshot.id}
-                href={src}
-                target="_blank"
-                rel="noreferrer"
-                className="group overflow-hidden rounded-lg border border-border bg-background transition-colors hover:border-accent"
-              >
-                <div className="aspect-video overflow-hidden bg-black">
-                  <img
-                    src={src}
-                    alt={`Screenshot at ${formatTimestamp(screenshot.capturedAtMs)}`}
-                    loading="lazy"
-                    className="h-full w-full object-cover transition-transform duration-200 group-hover:scale-[1.02]"
-                  />
-                </div>
-                <div className="flex items-center justify-between gap-3 px-3 py-2 text-xs">
-                  <span className="font-semibold tabular-nums">
-                    {formatTimestamp(screenshot.capturedAtMs)}
-                  </span>
-                  <span className="text-muted-foreground tabular-nums">
-                    {screenshot.width}x{screenshot.height}
-                  </span>
-                </div>
-              </a>
-            );
-          })}
+  const selectedSrc = selectedScreenshot
+    ? api.meetingScreenshotUrl(meetingId, selectedScreenshot.id)
+    : null;
+
+  useEffect(() => {
+    if (!selectedScreenshot) return;
+
+    function onKeyDown(event: KeyboardEvent) {
+      if (event.key === "Escape") setSelectedScreenshot(null);
+    }
+
+    document.addEventListener("keydown", onKeyDown);
+    return () => document.removeEventListener("keydown", onKeyDown);
+  }, [selectedScreenshot]);
+
+  function openScreenshot(screenshot: MeetingScreenshot) {
+    setSelectedScreenshot(screenshot);
+    setZoom(1);
+  }
+
+  return (
+    <>
+      <Card className="overflow-hidden">
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2 text-base">
+            <Images className="h-5 w-5 text-muted-foreground" aria-hidden />
+            Screenshots
+          </CardTitle>
+          <p className="mt-1 text-sm text-muted-foreground">
+            Captured automatically when the visible meeting content changes.
+          </p>
+        </CardHeader>
+
+        {screenshots.length === 0 ? (
+          <EmptyState
+            icon={Images}
+            title="No screenshots yet"
+            description={
+              active
+                ? "Screenshots will appear when the shared screen or visible content changes."
+                : "No screenshots were captured."
+            }
+            className="m-4 border-0 bg-background px-4 py-10"
+          />
+        ) : (
+          <div className="grid gap-3 p-4 sm:grid-cols-2 lg:grid-cols-3">
+            {screenshots.map((screenshot) => {
+              const src = api.meetingScreenshotUrl(meetingId, screenshot.id);
+              return (
+                <button
+                  key={screenshot.id}
+                  type="button"
+                  onClick={() => openScreenshot(screenshot)}
+                  className="group cursor-pointer overflow-hidden rounded-lg border border-border bg-background text-left transition-colors hover:border-accent focus-visible:outline-2 focus-visible:outline-accent"
+                >
+                  <div className="aspect-video overflow-hidden bg-black">
+                    <img
+                      src={src}
+                      alt={`Screenshot at ${formatTimestamp(screenshot.capturedAtMs)}`}
+                      loading="lazy"
+                      className="h-full w-full object-cover transition-transform duration-200 group-hover:scale-[1.02]"
+                    />
+                  </div>
+                  <div className="flex items-center justify-between gap-3 px-3 py-2 text-xs">
+                    <span className="font-semibold tabular-nums">
+                      {formatTimestamp(screenshot.capturedAtMs)}
+                    </span>
+                    <span className="text-muted-foreground tabular-nums">
+                      {screenshot.width}x{screenshot.height}
+                    </span>
+                  </div>
+                </button>
+              );
+            })}
+          </div>
+        )}
+      </Card>
+
+      {selectedScreenshot && selectedSrc && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-label={`Screenshot at ${formatTimestamp(selectedScreenshot.capturedAtMs)}`}
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4 backdrop-blur-sm"
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget) setSelectedScreenshot(null);
+          }}
+        >
+          <div className="flex max-h-[92dvh] w-full max-w-6xl flex-col overflow-hidden rounded-xl border border-border bg-surface shadow-2xl">
+            <div className="flex flex-col gap-3 border-b border-border px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
+              <div className="min-w-0">
+                <p className="truncate text-sm font-bold">
+                  Screenshot at {formatTimestamp(selectedScreenshot.capturedAtMs)}
+                </p>
+                <p className="text-xs text-muted-foreground tabular-nums">
+                  {selectedScreenshot.width}x{selectedScreenshot.height} ·{" "}
+                  {Math.round(zoom * 100)}%
+                </p>
+              </div>
+              <div className="flex shrink-0 flex-wrap items-center gap-2">
+                <Button
+                  type="button"
+                  variant="secondary"
+                  size="icon"
+                  onClick={() => setZoom((value) => Math.max(0.5, value - 0.25))}
+                  disabled={zoom <= 0.5}
+                  aria-label="Zoom out"
+                  className="h-9 w-9"
+                >
+                  <ZoomOut className="h-4 w-4" aria-hidden />
+                </Button>
+                <Button
+                  type="button"
+                  variant="secondary"
+                  size="icon"
+                  onClick={() => setZoom((value) => Math.min(3, value + 0.25))}
+                  disabled={zoom >= 3}
+                  aria-label="Zoom in"
+                  className="h-9 w-9"
+                >
+                  <ZoomIn className="h-4 w-4" aria-hidden />
+                </Button>
+                <a
+                  href={selectedSrc}
+                  download={`meeting-${meetingId}-screenshot-${selectedScreenshot.id}.png`}
+                  className={buttonClass({ variant: "secondary", size: "sm" })}
+                >
+                  <Download className="h-4 w-4" aria-hidden />
+                  Save image
+                </a>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon"
+                  onClick={() => setSelectedScreenshot(null)}
+                  aria-label="Close screenshot preview"
+                  className="h-9 w-9"
+                >
+                  <X className="h-4 w-4" aria-hidden />
+                </Button>
+              </div>
+            </div>
+            <div className="min-h-0 flex-1 overflow-auto bg-background p-4">
+              <div className="flex min-h-full items-start justify-center">
+                <img
+                  src={selectedSrc}
+                  alt={`Screenshot at ${formatTimestamp(selectedScreenshot.capturedAtMs)}`}
+                  className="max-w-none rounded-lg border border-border bg-black shadow-lg"
+                  style={{ width: selectedScreenshot.width * zoom }}
+                />
+              </div>
+            </div>
+          </div>
         </div>
       )}
-    </Card>
+    </>
   );
 }
 
-function BotProgressTimeline({ events }: { events: MeetingStatusEvent[] }) {
-  return (
-    <Card>
-      <CardHeader>
-        <CardTitle className="text-base">Session events</CardTitle>
-      </CardHeader>
+function RecentEvents({ events }: { events: MeetingStatusEvent[] }) {
+  const [expanded, setExpanded] = useState(false);
+  const visibleEvents = expanded ? events : events.slice(-5);
+  const hasMore = events.length > 5;
+  const latestEventId = events.at(-1)?.id;
 
+  return (
+    <div>
       {events.length === 0 ? (
-        <p className="p-4 text-sm text-muted-foreground">
+        <p className="text-sm text-muted-foreground">
           No event history is available for this meeting.
         </p>
       ) : (
-        <ol className="space-y-0 p-4" aria-label="Meeting event timeline">
-          {events.map((event, index) => {
-          const failed = event.status === "failed";
-          const latest = index === events.length - 1;
-          return (
-            <li key={event.id} className="relative flex gap-3 pb-4 last:pb-0">
-              {index < events.length - 1 && (
-                <span
-                  aria-hidden
-                  className="absolute left-[11px] top-6 h-[calc(100%-1rem)] w-px bg-border"
-                />
-              )}
-              <div className="relative z-10">
-                <span
-                  className={`flex h-6 w-6 shrink-0 items-center justify-center rounded-full border ${
-                    failed
-                      ? "border-destructive bg-destructive/10 text-destructive"
-                      : latest
-                        ? "border-accent bg-accent/10 text-accent"
-                        : "border-accent bg-accent text-accent-foreground"
-                  }`}
-                >
-                  {failed ? (
-                    <XCircle className="h-3.5 w-3.5" aria-hidden />
-                  ) : latest ? (
-                    <span className="h-1.5 w-1.5 rounded-full bg-current" />
-                  ) : (
-                    <CheckCircle2 className="h-3.5 w-3.5" aria-hidden />
-                  )}
-                </span>
-              </div>
-              <div className="min-w-0 pt-0.5">
-                <span className="block text-sm font-semibold text-foreground">
-                  {eventLabels[event.status] ?? event.status}
-                </span>
-                <span className="mt-0.5 block text-xs text-muted-foreground">
-                  {formatDateTime(event.createdAt)}
-                </span>
-                {event.message && (
-                  <span className="mt-0.5 block text-xs text-muted-foreground">
-                    {event.message}
-                  </span>
+        <ol className="space-y-0" aria-label="Meeting event timeline">
+          {visibleEvents.map((event, index) => {
+            const failed = event.status === "failed";
+            const latest = event.id === latestEventId;
+            return (
+              <li key={event.id} className="relative flex gap-3 pb-3 last:pb-0">
+                {index < visibleEvents.length - 1 && (
+                  <span
+                    aria-hidden
+                    className="absolute left-[11px] top-6 h-[calc(100%-1rem)] w-px bg-border"
+                  />
                 )}
-              </div>
-            </li>
-          );
-        })}
-      </ol>
+                <div className="relative z-10">
+                  <span
+                    className={`flex h-6 w-6 shrink-0 items-center justify-center rounded-full border ${
+                      failed
+                        ? "border-destructive bg-destructive/10 text-destructive"
+                        : latest
+                          ? "border-accent bg-accent/10 text-accent"
+                          : "border-accent bg-accent text-accent-foreground"
+                    }`}
+                  >
+                    {failed ? (
+                      <XCircle className="h-3.5 w-3.5" aria-hidden />
+                    ) : latest ? (
+                      <span className="h-1.5 w-1.5 rounded-full bg-current" />
+                    ) : (
+                      <CheckCircle2 className="h-3.5 w-3.5" aria-hidden />
+                    )}
+                  </span>
+                </div>
+                <div className="min-w-0 pt-0.5">
+                  <span className="block text-sm font-semibold text-foreground">
+                    {eventLabels[event.status] ?? event.status}
+                  </span>
+                  <span className="mt-0.5 block text-xs text-muted-foreground">
+                    {formatDateTime(event.createdAt)}
+                  </span>
+                  {event.message && (
+                    <span className="mt-0.5 block text-xs text-muted-foreground">
+                      {event.message}
+                    </span>
+                  )}
+                </div>
+              </li>
+            );
+          })}
+        </ol>
       )}
-    </Card>
+      {hasMore && (
+        <Button
+          type="button"
+          variant="secondary"
+          size="sm"
+          onClick={() => setExpanded((value) => !value)}
+          className="mt-4 w-full"
+        >
+          {expanded ? "Show less" : "View all events"}
+        </Button>
+      )}
+    </div>
+  );
+}
+
+function AssetSection({
+  title,
+  icon,
+  children,
+}: {
+  title: string;
+  icon: ReactNode;
+  children: ReactNode;
+}) {
+  return (
+    <section className="p-4">
+      <h3 className="mb-3 flex items-center gap-2 text-sm font-bold">
+        {icon}
+        {title}
+      </h3>
+      {children}
+    </section>
+  );
+}
+
+function MeetingAssets({
+  meeting,
+  hasAudio,
+  hasVideo,
+  isStopping,
+  transcriptCount,
+  selectedSummary,
+}: {
+  meeting: MeetingDetail;
+  hasAudio: boolean;
+  hasVideo: boolean;
+  isStopping: boolean;
+  transcriptCount: number;
+  selectedSummary: Summary | null;
+}) {
+  const showLiveSession = isBotActive(meeting.status) && !isStopping;
+
+  return (
+    <aside>
+      <Card className="overflow-hidden">
+        <CardHeader>
+          <CardTitle className="text-base">Meeting assets</CardTitle>
+          <p className="mt-1 text-sm text-muted-foreground">
+            Recording, video, file details, and recent session activity.
+          </p>
+        </CardHeader>
+
+        <div className="divide-y divide-border">
+          {showLiveSession && (
+            <AssetSection
+              title="Live session"
+              icon={
+                <MonitorPlay
+                  className="h-4 w-4 text-muted-foreground"
+                  aria-hidden
+                />
+              }
+            >
+              <div className="space-y-3">
+                <p className="text-sm text-muted-foreground">
+                  Monitor the meeting session when host approval or manual action is required.
+                </p>
+                <Link
+                  to={`/meetings/${meeting.id}/live`}
+                  target="_blank"
+                  rel="noreferrer"
+                  className={buttonClass({
+                    variant: "secondary",
+                    className: "w-full justify-center",
+                  })}
+                >
+                  <MonitorPlay className="h-4 w-4" aria-hidden />
+                  Open Live View
+                  <ExternalLink
+                    className="h-3.5 w-3.5 text-muted-foreground"
+                    aria-hidden
+                  />
+                </Link>
+              </div>
+            </AssetSection>
+          )}
+
+          <AssetSection
+            title="Recording"
+            icon={
+              <AudioLines className="h-4 w-4 text-muted-foreground" aria-hidden />
+            }
+          >
+            {!hasAudio ? (
+              <EmptyState
+                icon={AudioLines}
+                title="Recording is not available yet"
+                description={
+                  isInProgress(meeting.status)
+                    ? "The recording appears after the meeting ends or the session is stopped."
+                    : "No audio recording is available for this meeting."
+                }
+                className="border-0 bg-background px-4 py-10"
+              />
+            ) : (
+              <AudioPlayer
+                src={api.meetingAudioUrl(meeting.id)}
+                downloadUrl={api.meetingAudioDownloadUrl(meeting.id)}
+                downloadName={`meeting-${meeting.id}.ogg`}
+              />
+            )}
+          </AssetSection>
+
+          {(meeting.captureVideo || hasVideo) && (
+            <AssetSection
+              title="Video recording"
+              icon={
+                <MonitorPlay
+                  className="h-4 w-4 text-muted-foreground"
+                  aria-hidden
+                />
+              }
+            >
+              {!hasVideo ? (
+                <EmptyState
+                  icon={MonitorPlay}
+                  title="Video is not available yet"
+                  description={
+                    isVideoArtifactPending(meeting)
+                      ? "The video is still being finalized and uploaded."
+                      : meeting.events.some((event) => event.status === "video_failed")
+                        ? "Video recording failed, but audio and transcript can still be used."
+                        : isInProgress(meeting.status)
+                          ? "The video appears after the meeting ends or the session is stopped."
+                          : "No video recording is available for this meeting."
+                  }
+                  className="border-0 bg-background px-4 py-10"
+                />
+              ) : (
+                <div className="space-y-3">
+                  <div className="overflow-hidden rounded-xl border border-border bg-background">
+                    <div className="flex items-center justify-between gap-3 border-b border-border px-3 py-2">
+                      <div className="flex min-w-0 items-center gap-2">
+                        <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-accent/10 text-accent">
+                          <MonitorPlay className="h-4 w-4" aria-hidden />
+                        </span>
+                        <div className="min-w-0">
+                          <p className="truncate text-xs font-bold">Meeting video</p>
+                          <p className="text-xs text-muted-foreground">Ready to review</p>
+                        </div>
+                      </div>
+                      <span className="rounded-full bg-muted-foreground/10 px-2 py-0.5 text-xs font-bold text-muted-foreground">
+                        MP4
+                      </span>
+                    </div>
+                    <div className="bg-black p-1">
+                      <video
+                        src={api.meetingVideoUrl(meeting.id)}
+                        controls
+                        preload="metadata"
+                        className="aspect-video w-full rounded-lg bg-black"
+                      />
+                    </div>
+                  </div>
+                  <a
+                    href={api.meetingVideoDownloadUrl(meeting.id)}
+                    download={`meeting-${meeting.id}.mp4`}
+                    className={buttonClass({
+                      variant: "secondary",
+                      className: "w-full justify-center",
+                    })}
+                  >
+                    <Download className="h-4 w-4" aria-hidden />
+                    Download video
+                  </a>
+                </div>
+              )}
+            </AssetSection>
+          )}
+
+          <AssetSection
+            title="File details"
+            icon={<FileText className="h-4 w-4 text-muted-foreground" aria-hidden />}
+          >
+            <div className="space-y-3 text-sm">
+              <div className="flex items-center justify-between gap-3">
+                <span className="text-muted-foreground">Duration</span>
+                <span className="font-semibold">
+                  {meeting.durationSec != null ? formatDuration(meeting.durationSec) : "-"}
+                </span>
+              </div>
+              <div className="flex items-center justify-between gap-3">
+                <span className="text-muted-foreground">Transcript segments</span>
+                <span className="font-semibold">{transcriptCount}</span>
+              </div>
+              <div className="flex items-center justify-between gap-3">
+                <span className="text-muted-foreground">Screenshots</span>
+                <span className="font-semibold">{meeting.screenshots.length}</span>
+              </div>
+              <div className="flex items-center justify-between gap-3">
+                <span className="text-muted-foreground">Video</span>
+                <span className="font-semibold">
+                  {meeting.videoObjectKey
+                    ? meeting.videoSizeBytes != null
+                      ? formatFileSize(meeting.videoSizeBytes)
+                      : "Ready"
+                    : meeting.captureVideo
+                      ? "Pending"
+                      : "Not requested"}
+                </span>
+              </div>
+              <div className="flex items-center justify-between gap-3">
+                <span className="text-muted-foreground">Summary</span>
+                <span className="font-semibold">
+                  {selectedSummary?.status === "completed"
+                    ? "Ready"
+                    : selectedSummary?.status === "processing"
+                      ? "Processing"
+                      : "Not generated"}
+                </span>
+              </div>
+            </div>
+          </AssetSection>
+
+          <AssetSection
+            title="Recent events"
+            icon={
+              <CheckCircle2
+                className="h-4 w-4 text-muted-foreground"
+                aria-hidden
+              />
+            }
+          >
+            <RecentEvents events={meeting.events} />
+          </AssetSection>
+        </div>
+      </Card>
+    </aside>
   );
 }
 
@@ -584,30 +939,6 @@ export function MeetingDetailPage() {
             )}
             <Button
               type="button"
-              onClick={() => summarizeMutation.mutate()}
-              disabled={!canSummarize || summarizeMutation.isPending}
-              aria-busy={summarizeMutation.isPending}
-              title={
-                !hasStoredTranscript
-                  ? "Transcript is required before summary"
-                  : !selectedTemplateEnabled
-                    ? "This template is disabled"
-                  : isInProgress(meeting.status)
-                    ? "Wait until the meeting transcript is ready"
-                    : undefined
-              }
-            >
-              {summarizeMutation.isPending ? (
-                <Loader2 className="h-4 w-4 animate-spin" aria-hidden />
-              ) : (
-                <Sparkles className="h-4 w-4" aria-hidden />
-              )}
-              {selectedGroup?.latest.status === "completed"
-                ? "Regenerate summary"
-                : "Generate summary"}
-            </Button>
-            <Button
-              type="button"
               variant="danger"
               onClick={() => setDeleteOpen(true)}
               disabled={isInProgress(meeting.status) || deleteMutation.isPending}
@@ -726,38 +1057,6 @@ export function MeetingDetailPage() {
 
       <div className="grid gap-6 xl:grid-cols-[minmax(0,1fr)_360px]">
         <div className="space-y-6">
-          {isBotActive(meeting.status) && !isStopping && (
-            <Card>
-              <CardHeader className="flex flex-wrap items-center justify-between gap-3">
-                <div>
-                  <CardTitle className="flex items-center gap-2 text-base">
-                    <MonitorPlay className="h-5 w-5 text-muted-foreground" aria-hidden />
-                    Live View
-                  </CardTitle>
-                  <p className="mt-1 text-sm text-muted-foreground">
-                    Monitor the meeting session when host approval or manual action is required.
-                  </p>
-                </div>
-                <Link
-                  to={`/meetings/${meeting.id}/live`}
-                  target="_blank"
-                  rel="noreferrer"
-                  className={buttonClass({ variant: "secondary" })}
-                >
-                  <MonitorPlay className="h-4 w-4" aria-hidden />
-                  Open Live View
-                  <ExternalLink className="h-3.5 w-3.5 text-muted-foreground" aria-hidden />
-                </Link>
-              </CardHeader>
-            </Card>
-          )}
-
-          <ScreenshotGallery
-            meetingId={meeting.id}
-            screenshots={meeting.screenshots}
-            active={isBotActive(meeting.status)}
-          />
-
           <Card className="overflow-hidden">
             <CardHeader className="flex flex-wrap items-center justify-between gap-3">
               <div>
@@ -864,25 +1163,6 @@ export function MeetingDetailPage() {
                         ? "Generate a summary manually when the transcript is ready."
                         : "Transcript must be available before summary generation."
                     }
-                    action={
-                      canSummarize ? (
-                        <Button
-                          type="button"
-                          onClick={() => summarizeMutation.mutate()}
-                          disabled={summarizeMutation.isPending}
-                          aria-busy={summarizeMutation.isPending}
-                        >
-                          {summarizeMutation.isPending ? (
-                            <Loader2 className="h-4 w-4 animate-spin" aria-hidden />
-                          ) : (
-                            <Sparkles className="h-4 w-4" aria-hidden />
-                          )}
-                          {selectedGroup?.latest.status === "completed"
-                            ? "Regenerate summary"
-                            : "Generate summary"}
-                        </Button>
-                      ) : undefined
-                    }
                     className="min-h-[400px] border-0 bg-background"
                   />
                 )}
@@ -947,133 +1227,22 @@ export function MeetingDetailPage() {
               </div>
             )}
           </Card>
+
+          <ScreenshotGallery
+            meetingId={meeting.id}
+            screenshots={meeting.screenshots}
+            active={isBotActive(meeting.status)}
+          />
         </div>
 
-        <aside className="space-y-6">
-          {(meeting.captureVideo || hasVideo) && (
-            <Card>
-              <CardHeader>
-                <CardTitle className="flex items-center gap-2 text-base">
-                  <MonitorPlay className="h-5 w-5 text-muted-foreground" aria-hidden />
-                  Video recording
-                </CardTitle>
-              </CardHeader>
-              <div className="p-4">
-                {!hasVideo ? (
-                  <EmptyState
-                    icon={MonitorPlay}
-                    title="Video is not available yet"
-                    description={
-                      isVideoArtifactPending(meeting)
-                        ? "The video is still being finalized and uploaded."
-                        : meeting.events.some((event) => event.status === "video_failed")
-                          ? "Video recording failed, but audio and transcript can still be used."
-                          : isInProgress(meeting.status)
-                            ? "The video appears after the meeting ends or the session is stopped."
-                            : "No video recording is available for this meeting."
-                    }
-                    className="border-0 bg-background px-4 py-10"
-                  />
-                ) : (
-                  <div className="space-y-3">
-                    <video
-                      src={api.meetingVideoUrl(meeting.id)}
-                      controls
-                      preload="metadata"
-                      className="aspect-video w-full rounded-lg bg-black"
-                    />
-                    <a
-                      href={api.meetingVideoDownloadUrl(meeting.id)}
-                      download={`meeting-${meeting.id}.mp4`}
-                      className={buttonClass({
-                        variant: "secondary",
-                        className: "w-full justify-center",
-                      })}
-                    >
-                      <Download className="h-4 w-4" aria-hidden />
-                      Download video
-                    </a>
-                  </div>
-                )}
-              </div>
-            </Card>
-          )}
-
-          <Card>
-            <CardHeader>
-              <CardTitle className="flex items-center gap-2 text-base">
-                <AudioLines className="h-5 w-5 text-muted-foreground" aria-hidden />
-                Recording
-              </CardTitle>
-            </CardHeader>
-            <div className="p-4">
-              {!hasAudio ? (
-                <EmptyState
-                  icon={AudioLines}
-                  title="Recording is not available yet"
-                  description={
-                    isInProgress(meeting.status)
-                      ? "The recording appears after the meeting ends or the session is stopped."
-                      : "No audio recording is available for this meeting."
-                  }
-                  className="border-0 bg-background px-4 py-10"
-                />
-              ) : (
-                <AudioPlayer
-                  src={api.meetingAudioUrl(meeting.id)}
-                  downloadUrl={api.meetingAudioDownloadUrl(meeting.id)}
-                  downloadName={`meeting-${meeting.id}.ogg`}
-                />
-              )}
-            </div>
-          </Card>
-
-          <Card>
-            <CardHeader>
-              <CardTitle className="text-base">File details</CardTitle>
-            </CardHeader>
-            <div className="space-y-3 p-4 text-sm">
-              <div className="flex items-center justify-between gap-3">
-                <span className="text-muted-foreground">Duration</span>
-                <span className="font-semibold">
-                  {meeting.durationSec != null ? formatDuration(meeting.durationSec) : "-"}
-                </span>
-              </div>
-              <div className="flex items-center justify-between gap-3">
-                <span className="text-muted-foreground">Transcript segments</span>
-                <span className="font-semibold">{displayTranscript.length}</span>
-              </div>
-              <div className="flex items-center justify-between gap-3">
-                <span className="text-muted-foreground">Screenshots</span>
-                <span className="font-semibold">{meeting.screenshots.length}</span>
-              </div>
-              <div className="flex items-center justify-between gap-3">
-                <span className="text-muted-foreground">Video</span>
-                <span className="font-semibold">
-                  {meeting.videoObjectKey
-                    ? meeting.videoSizeBytes != null
-                      ? formatFileSize(meeting.videoSizeBytes)
-                      : "Ready"
-                    : meeting.captureVideo
-                      ? "Pending"
-                      : "Not requested"}
-                </span>
-              </div>
-              <div className="flex items-center justify-between gap-3">
-                <span className="text-muted-foreground">Summary</span>
-                <span className="font-semibold">
-                  {selectedSummary?.status === "completed"
-                    ? "Ready"
-                    : selectedSummary?.status === "processing"
-                      ? "Processing"
-                      : "Not generated"}
-                </span>
-              </div>
-            </div>
-          </Card>
-
-          <BotProgressTimeline events={meeting.events} />
-        </aside>
+        <MeetingAssets
+          meeting={meeting}
+          hasAudio={hasAudio}
+          hasVideo={hasVideo}
+          isStopping={isStopping}
+          transcriptCount={displayTranscript.length}
+          selectedSummary={selectedSummary}
+        />
       </div>
 
       <ConfirmDialog
