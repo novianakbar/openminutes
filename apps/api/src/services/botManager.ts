@@ -4,9 +4,15 @@ import { config } from "../config";
 
 const docker = new Docker();
 const optionalBotEnv = [
+  "BROWSER_STEALTH",
+  "CHROMIUM_FAKE_MEDIA",
+  "FAKE_MEDIA_DIR",
+  "JOIN_TIMEOUT_SEC",
+  "MAX_DURATION_MIN",
   "SCREENSHOT_INTERVAL_SEC",
   "SCREENSHOT_MAX_COUNT",
   "SCREENSHOT_MIN_HASH_DISTANCE",
+  "TZ",
 ]
   .map((key) => {
     const value = process.env[key]?.trim();
